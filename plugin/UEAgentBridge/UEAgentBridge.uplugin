@@ -1,0 +1,23 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0.0",
+	"FriendlyName": "UE Agent Bridge",
+	"Description": "Connects coding agents (Claude Code, Codex) to the Unreal Editor through a local, token-authenticated bridge. Pure Python: nothing to compile.",
+	"Category": "Editor",
+	"CreatedBy": "ue-agent-harness",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"Installed": false,
+	"EnabledByDefault": true,
+	"Plugins": [
+		{
+			"Name": "PythonScriptPlugin",
+			"Enabled": true
+		},
+		{
+			"Name": "EditorScriptingUtilities",
+			"Enabled": true
+		}
+	]
+}
