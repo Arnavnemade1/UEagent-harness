@@ -1,0 +1,4 @@
+ual_mannequin.glb  - "Universal Animation Library [Standard]" by Quaternius, CC0 1.0 (public domain).
+                     https://quaternius.com/packs/universalanimationlibrary.html
+                     (downloaded by fetch-assets.mjs from https://opengameart.org/node/174563; not stored in git)
+ball.png           - generated procedurally for this example, CC0.
