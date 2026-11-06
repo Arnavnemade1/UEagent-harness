@@ -34,6 +34,7 @@ export class BridgeClient extends EventEmitter {
     this.nextId = 1;
     this.buf = '';
     this.connecting = null;
+    this.connectingSock = null;
     this.closed = false;
     this.lastIdentity = null;
     this.retryTimer = null;
@@ -48,6 +49,7 @@ export class BridgeClient extends EventEmitter {
   }
 
   async connect() {
+    if (this.closed) throw new BridgeError('closed', 'bridge client is closed');
     if (this.connected) return this.info;
     if (!this.connecting) {
       this.connecting = this._connect().finally(() => { this.connecting = null; });
@@ -65,28 +67,55 @@ export class BridgeClient extends EventEmitter {
     if (!this.project && disc.project) this.project = disc.project;
     const sock = await new Promise((resolve, reject) => {
       const s = net.createConnection({ host: disc.host || '127.0.0.1', port: disc.port });
-      const t = setTimeout(() => { s.destroy(); reject(new BridgeError('connect_timeout', `bridge at port ${disc.port} did not accept the connection`)); }, 3000);
-      s.once('connect', () => { clearTimeout(t); resolve(s); });
-      s.once('error', (e) => {
+      this.connectingSock = s;
+      const cleanup = () => {
         clearTimeout(t);
+        s.off('connect', onConnect);
+        s.off('error', onError);
+        s.off('close', onClose);
+        if (this.connectingSock === s) this.connectingSock = null;
+      };
+      const onConnect = () => { cleanup(); resolve(s); };
+      const onError = (e) => {
+        cleanup();
+        s.destroy();
         reject(new BridgeError('connect_failed', `cannot reach the editor bridge on port ${disc.port} (${e.code || e.message}). The editor may still be starting. ${NOT_RUNNING_HINT}`));
-      });
+      };
+      const onClose = () => {
+        cleanup();
+        reject(new BridgeError(this.closed ? 'closed' : 'disconnected', this.closed ? 'bridge client is closed' : 'connection to the editor closed before connecting'));
+      };
+      const t = setTimeout(() => {
+        cleanup();
+        s.destroy();
+        reject(new BridgeError('connect_timeout', `bridge at port ${disc.port} did not accept the connection`));
+      }, 3000);
+      s.once('connect', onConnect);
+      s.once('error', onError);
+      s.once('close', onClose);
     });
+    if (this.closed) {
+      sock.destroy();
+      throw new BridgeError('closed', 'bridge client is closed');
+    }
     sock.setNoDelay(true);
     sock.setKeepAlive(true, 15000);
     sock.setEncoding('utf8');
     this.sock = sock;
     this.buf = '';
-    sock.on('data', (chunk) => this._onData(chunk));
+    sock.on('data', (chunk) => { if (this.sock === sock) this._onData(chunk); });
     sock.on('close', () => this._onClose(sock));
     sock.on('error', () => { /* close follows */ });
     let hello;
     try {
       hello = (await this._request('hello', { token: disc.token, client: this.clientName, subscribe: this.subscribe }, 10000)).result;
     } catch (e) {
+      this._onClose(sock);
       sock.destroy();
-      this.sock = null;
       throw e;
+    }
+    if (this.closed || this.sock !== sock) {
+      throw new BridgeError(this.closed ? 'closed' : 'disconnected', 'connection to the editor closed during the handshake');
     }
     this.info = hello;
     this.rev = hello.rev || 0;
@@ -107,6 +136,7 @@ export class BridgeClient extends EventEmitter {
       if (!line.trim()) continue;
       let msg;
       try { msg = JSON.parse(line); } catch { continue; }
+      if (!msg || typeof msg !== 'object' || Array.isArray(msg)) continue;
       if (msg.event) {
         if (typeof msg.rev === 'number' && msg.rev > this.rev) this.rev = msg.rev;
         this.emit('change', msg);
@@ -161,12 +191,19 @@ export class BridgeClient extends EventEmitter {
     return new Promise((resolve, reject) => {
       if (!this.sock) return reject(new BridgeError('disconnected', 'not connected'));
       const id = this.nextId++;
+      // Serialization can fail (e.g. circular Python arguments). Do it before
+      // allocating a timer or registering work that can never be sent.
+      const line = JSON.stringify({ id, method, params }) + '\n';
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new BridgeError('timeout', `${method === 'call' ? params.fn : method} timed out after ${Math.round(timeoutMs / 1000)}s (the editor may be busy, e.g. compiling shaders; it will still finish in the background)`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      this.sock.write(JSON.stringify({ id, method, params }) + '\n');
+      try { this.sock.write(line); } catch (e) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(e);
+      }
     });
   }
 
@@ -198,9 +235,15 @@ export class BridgeClient extends EventEmitter {
   close() {
     this.closed = true;
     if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    this.connectingSock?.destroy();
     if (this.sock) {
-      try { this.sock.end(JSON.stringify({ id: 0, method: 'bye' }) + '\n'); } catch { /* ignore */ }
-      this.sock.destroy();
+      const sock = this.sock;
+      try { sock.end(JSON.stringify({ id: 0, method: 'bye' }) + '\n'); } catch { /* ignore */ }
+      // Reject pending work before clearing the socket identity; its later close
+      // event otherwise cannot distinguish this connection from an obsolete one.
+      this._onClose(sock);
+      sock.destroy();
     }
     this.sock = null;
     this.info = null;
