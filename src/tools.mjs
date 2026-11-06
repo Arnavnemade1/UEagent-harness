@@ -109,6 +109,17 @@ const TOOLS = [
     annotations: ro,
   },
   {
+    name: 'ue_repair',
+    title: 'Repair verified static locations',
+    description: 'Apply only deterministic static-location repairs derived from ue_verify criteria, as one undoable batch. Pass the same snapshot, original request and criteria. Recomputes the plan from retained evidence; refuses unknown checks, coupled constraints, active Sequencer/PIE, changed level/revision/transforms or targets with attached children. Does not repair animation keys or guess compositions. No automatic retry. Reobserve and reverify all criteria afterwards; use a fixed iteration budget.',
+    inputSchema: { type: 'object', properties: {
+      snapshot: str('ue_observe snapshot used by the verification report.'),
+      request: str('Same original creative request passed to ue_verify.'),
+      criteria: { type: 'array', minItems: 1, maxItems: 16, items: obj('Same criteria objects as ue_verify; only uncoupled failed location checks can be repaired.') },
+    }, required: ['snapshot', 'request', 'criteria'], additionalProperties: false },
+    annotations: rw,
+  },
+  {
     name: 'ue_edit_actors',
     title: 'Edit actors (batched)',
     description: 'Apply a batch of actor operations as ONE undo step; if any op fails the whole batch is rolled back (atomic=true). Every result is read back from the engine. Ops:\n'
@@ -539,6 +550,17 @@ const HANDLERS = {
     const current = s.observations.get(a.snapshot);
     const previous = a.previous === undefined ? null : s.observations.get(a.previous);
     return ok(s, verifyScene(current, previous, a));
+  },
+  async ue_repair(s, a) {
+    if (Object.keys(a).some((key) => !['snapshot', 'request', 'criteria'].includes(key))) throw new BridgeError('bad_args', 'Unknown repair argument.');
+    const current = s.observations.get(a.snapshot);
+    const report = verifyScene(current, null, a);
+    const failures = report.checks.filter((check) => check.status === 'fail');
+    if (!failures.length || report.counts.unknown || failures.some((check) => !check.repair)) {
+      throw new BridgeError('repair_unavailable', 'Only uncoupled failed static-location criteria with complete evidence can be repaired. Resolve missing evidence or plan other edits explicitly.');
+    }
+    const result = await s.call('repair_locations', { project: current.project, level: current.level, bridge_instance: current.bridge_instance, revision: current.revision, repairs: failures.map((check) => check.repair) }, 60000);
+    return ok(s, result.result, { warnings: result.warnings });
   },
   ue_inspect: (s, a) => bridgeTool(s, 'inspect', a),
   ue_find_assets: (s, a) => bridgeTool(s, 'find_assets', a),

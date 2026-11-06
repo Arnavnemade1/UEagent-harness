@@ -52,6 +52,7 @@ function resolve(snapshot, target) {
 
 function secondsBetween(current, previous) {
   if (!previous || !current.project || !current.level || current.project !== previous.project || current.level !== previous.level || current.world !== previous.world) return null;
+  if (JSON.stringify(current.bridge_instance) !== JSON.stringify(previous.bridge_instance)) return null;
   const a = previous.timeline, b = current.timeline;
   if (!a || !b || a.sequence !== b.sequence || a.playing !== false || b.playing !== false
     || !Number.isFinite(a.frame) || !Number.isFinite(b.frame) || b.frame <= a.frame
@@ -139,10 +140,12 @@ export function verifyScene(current, previous, { request, criteria }) {
       check.repair_note = 'Coupled constraints require planning; no automatic location repair offered.';
     }
   }
-  return { schema_version: 1, request, snapshot: current.id, previous: previous?.id ?? null,
+  const report = { schema_version: 1, request, snapshot: current.id, previous: previous?.id ?? null,
     project: current.project, level: current.level, revision: current.revision,
     status: counts.fail ? 'fail' : counts.unknown ? 'incomplete' : 'pass', counts, checks,
     scope: 'Only the listed deterministic criteria at the sampled state. This is not a visual-quality or complete-animation approval.',
     next: counts.unknown ? 'Capture the missing evidence; do not count unknown checks as passed.'
       : counts.fail ? 'Repair targeted failures, capture a fresh observation, then rerun every criterion.' : 'Review rendered frames against the creative brief; validate the complete timeline before final export.' };
+  if (JSON.stringify(report).length > 56000) throw new BridgeError('report_too_large', 'Use fewer criteria per report to preserve complete structured evidence.');
+  return report;
 }

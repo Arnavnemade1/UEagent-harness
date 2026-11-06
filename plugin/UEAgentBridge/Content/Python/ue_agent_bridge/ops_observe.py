@@ -1,6 +1,7 @@
 """Bounded, read-only scene evidence. Never loads assets or captures render buffers."""
 import json
 import math
+import os
 import time
 
 import unreal
@@ -48,7 +49,7 @@ def _camera(sc, target, projection):
         offset = _read(lambda: comp.get_editor_property("off_center_projection_offset"))
         if offset is not None and (abs(offset.x) > 1e-6 or abs(offset.y) > 1e-6):
             out["projection"] = "unsupported_off_center"
-    if projection:
+    if projection is not None:
         if target != "@viewport":
             raise BridgeError("bad_args", "projection overrides are only allowed for @viewport")
         if not isinstance(projection, dict) or set(projection) != {"hfov", "aspect"}:
@@ -168,6 +169,7 @@ def observe(ctx, a):
         acts = sc.query(flt)
     acts.sort(key=lambda actor: actor.get_path_name())
     out = {"schema_version": 1, "project": ctx.server.paths.get("project_file"),
+           "bridge_instance": {"pid": os.getpid(), "started": ctx.server.started_at},
            "level": compat.level_path(), "world": "pie" if compat.is_pie() else "editor",
            "revision": ctx.server.rev, "captured_at": time.time(), "timeline": _timeline(),
            "camera": _camera(sc, a.get("camera", "@viewport"), a.get("projection")),
