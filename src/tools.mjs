@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { INTENT_GUIDANCE } from './intent.mjs';
 import { ObservationStore } from './scene-intelligence.mjs';
+import { verifyScene } from './verification.mjs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -27,6 +28,7 @@ ${INTENT_GUIDANCE}
 - Prefer batched structured tools (ue_edit_actors/ue_edit_assets take many ops per call). Use ue_python for anything else (full \`unreal\` API, runs on the game thread).
 - Each mutating call is ONE undo step labelled with your name (Edit > Undo History); ue_undo reverts it. Batches roll back on failure.
 - Verify your work: results are read back from the engine; use ue_screenshot to look, ue_logs severity=error after changes, ue_build after editing C++.
+- For production tasks, preserve the creative brief and turn it into explicit criteria with reasons. Capture only relevant actors with ue_observe, then ue_verify. Unknown evidence is not a pass. Check rendered images separately for appearance and occlusion; compare paused Sequencer samples for motion. Reobserve and reverify after repairs, with a fixed iteration budget (default 3).
 - Results may end with an [engine sync] digest of what the user/other agents changed since your last call. Respect their edits; don't undo them.
 Units: centimetres, degrees. rotation = [pitch, yaw, roll]. Asset paths like /Game/Folder/Asset. Actor targets: label, wildcard (Wall_*), @selected, path, or $N (actors from op N of the same batch).`;
 
@@ -84,6 +86,26 @@ const TOOLS = [
       camera: str('Camera actor path/label, or @viewport (default). Does not move the viewport.'),
       projection: obj('For @viewport only: {hfov: horizontal degrees, aspect: width/height}. Caller-calibrated; no assumed lens.'),
     } },
+    annotations: ro,
+  },
+  {
+    name: 'ue_verify',
+    title: 'Verify scene criteria',
+    description: 'Check captured scene evidence against explicit criteria derived from the original request. Each check reports pass/fail/unknown with exact actor paths, sampled frame, property and measurements. Supports exists, location, distance, separated (AABB only), in_frame (no occlusion), mesh_assigned, max_speed and rotation_step. Temporal checks require two paused, increasing samples of the same Sequencer timeline. Returns guarded location repair proposals only for uncoupled static editor positions. No rendering, evaluation model or editor mutation. A report passing these criteria does not approve visual quality or the full animation.',
+    inputSchema: { type: 'object', properties: {
+      snapshot: str('Current ue_observe snapshot id from this session.'),
+      previous: str('Optional earlier observation id for temporal checks.'),
+      request: str('Original creative brief, including constraints (max 4000 characters).'),
+      criteria: { type: 'array', minItems: 1, maxItems: 16, items: { type: 'object', properties: {
+        id: str('Unique check identifier.'), reason: str('How this criterion serves the original request.'),
+        type: { type: 'string', enum: ['exists', 'location', 'distance', 'separated', 'in_frame', 'mesh_assigned', 'max_speed', 'rotation_step'] },
+        actor: str('Exact actor path or unique label; no wildcards.'), other: str('Second actor for distance/separated.'),
+        expected: vec('Required world location [x,y,z] in cm for location.'), tolerance_cm: num('Required nonnegative location tolerance.'),
+        min_cm: num('Minimum distance between actor origins.'), max_cm: num('Maximum distance between actor origins.'),
+        fully_inside: bool('in_frame: require whole bounds inside frame (default true).'),
+        max_cm_s: num('Maximum average speed between samples.'), max_degrees: num('Maximum orientation change between samples (0..180).'),
+      }, required: ['id', 'reason', 'type', 'actor'], additionalProperties: false } },
+    }, required: ['snapshot', 'request', 'criteria'], additionalProperties: false },
     annotations: ro,
   },
   {
@@ -511,6 +533,12 @@ const HANDLERS = {
   async ue_observe(s, a) {
     const r = await s.call('observe', a, 30000);
     return ok(s, s.observations.add(r.result), { warnings: r.warnings });
+  },
+  ue_verify(s, a) {
+    if (Object.keys(a).some((key) => !['snapshot', 'previous', 'request', 'criteria'].includes(key))) throw new BridgeError('bad_args', 'Unknown verification argument.');
+    const current = s.observations.get(a.snapshot);
+    const previous = a.previous === undefined ? null : s.observations.get(a.previous);
+    return ok(s, verifyScene(current, previous, a));
   },
   ue_inspect: (s, a) => bridgeTool(s, 'inspect', a),
   ue_find_assets: (s, a) => bridgeTool(s, 'find_assets', a),
