@@ -30,6 +30,20 @@ const HELP = `ue-agent ${VERSION} — connect Claude Code / Codex to Unreal Edit
   ue-agent uninstall [Project.uproject]
 `;
 
+const RELOAD_PY = `import importlib, sys, unreal
+_order = ("registry", "compat", "values", "scene", "watch", "server", "ops_core", "ops_actors",
+          "ops_assets", "ops_editor", "ops_blueprint", "ops_transfer", "menu")
+_h = {}
+def _go(_dt):
+    unreal.unregister_slate_post_tick_callback(_h["h"])
+    for n in _order:
+        m = sys.modules.get("ue_agent_bridge." + n)
+        if m is not None:
+            importlib.reload(m)
+    importlib.reload(sys.modules["ue_agent_bridge"])
+    sys.modules["ue_agent_bridge"].start()
+_h["h"] = unreal.register_slate_post_tick_callback(_go)`;
+
 async function withClient(args, fn) {
   const client = new BridgeClient({ project: findProject({ explicit: args.project }), clientName: 'cli', subscribe: false });
   try { return await fn(client); } finally { client.close(); }
@@ -78,12 +92,13 @@ async function main() {
     case 'reload':
       return withClient(args, async (c) => {
         const before = (await c.connect()).started;
-        await c.call('python', { code: 'import ue_agent_bridge; ue_agent_bridge.restart()' });
+        // self-contained so it also upgrades plugins that predate ue_agent_bridge.restart()
+        await c.call('python', { code: RELOAD_PY });
         c.close();
         const fresh = new BridgeClient({ project: c.project, clientName: 'cli', subscribe: false });
         try {
           const info = await fresh.waitForEditor(30000);
-          print(`bridge reloaded (v${info.version}, port ${info.port}${info.started === before ? '' : ''})`);
+          print(`bridge reloaded (v${info.version}, port ${info.port})`);
         } finally { fresh.close(); }
         return 0;
       });
