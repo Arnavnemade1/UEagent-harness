@@ -2,42 +2,53 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { HOME_DIR, pidAlive, readJson, samePath } from './util.mjs';
 
-function uprojectIn(dir) {
-  try {
-    const hits = fs.readdirSync(dir).filter((n) => n.toLowerCase().endsWith('.uproject')).sort();
-    return hits.length ? path.join(dir, hits[0]) : null;
-  } catch { return null; }
+function chooseProject(candidates) {
+  const unique = candidates.filter((p, i) => p && !candidates.slice(0, i).some((q) => samePath(p, q)));
+  if (unique.length > 1) {
+    const error = new Error(`Multiple Unreal projects match. Set UE_AGENT_PROJECT or pass --project to choose explicitly: ${unique.join(', ')}`);
+    error.code = 'ambiguous_project';
+    error.data = { projects: unique };
+    throw error;
+  }
+  return unique[0] || null;
 }
 
-/**
- * Find the .uproject to work on: explicit arg -> UE_AGENT_PROJECT -> walk up from cwd
- * -> one directory down from cwd -> most recently started live editor.
- */
+function projectsIn(dir) {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.uproject'))
+      .map((entry) => path.join(dir, entry.name)).sort();
+  } catch { return []; }
+}
+
+/** Resolve the user's project without silently choosing a different editor. */
 export function findProject({ explicit, cwd = process.cwd() } = {}) {
   const given = explicit || process.env.UE_AGENT_PROJECT;
   if (given) {
     const p = path.resolve(cwd, given);
-    if (p.toLowerCase().endsWith('.uproject') && fs.existsSync(p)) return p;
-    const inDir = uprojectIn(p);
-    if (inDir) return inDir;
+    if (p.toLowerCase().endsWith('.uproject')) {
+      try { if (fs.statSync(p).isFile()) return p; } catch { /* report below */ }
+    } else {
+      const hit = chooseProject(projectsIn(p));
+      if (hit) return hit;
+    }
+    const error = new Error(`Unreal project not found at ${p}. Correct --project or UE_AGENT_PROJECT before continuing.`);
+    error.code = 'project_not_found';
+    throw error;
   }
   let dir = path.resolve(cwd);
   for (;;) {
-    const hit = uprojectIn(dir);
+    const hit = chooseProject(projectsIn(dir));
     if (hit) return hit;
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-  try {
-    const subdirs = fs.readdirSync(cwd, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith('.')).slice(0, 64);
-    for (const d of subdirs) {
-      const hit = uprojectIn(path.join(cwd, d.name));
-      if (hit) return hit;
-    }
-  } catch { /* ignore */ }
-  const live = listInstances();
-  return live.length ? live[0].project : null;
+  let subdirs = [];
+  try { subdirs = fs.readdirSync(cwd, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith('.')); } catch { /* ignore */ }
+  const child = chooseProject(subdirs.flatMap((d) => projectsIn(path.join(cwd, d.name))));
+  if (child) return child;
+  return chooseProject(listInstances().map((instance) => instance.project));
 }
 
 export function projectInfo(projectFile) {
@@ -86,5 +97,7 @@ export function findBridge(projectFile) {
     if (inst) return inst;
     return null;
   }
-  return listInstances()[0] || null;
+  const live = listInstances();
+  const project = chooseProject(live.map((instance) => instance.project));
+  return live.find((instance) => samePath(instance.project, project)) || null;
 }
