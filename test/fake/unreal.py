@@ -944,8 +944,12 @@ class TopLevelAssetPath(StructBase):
 class ARFilter(StructBase):
     _fields = ("package_paths", "recursive_paths", "class_paths", "class_names", "recursive_classes")
 
-    def __init__(self):
-        self.package_paths, self.recursive_paths, self.class_paths, self.class_names, self.recursive_classes = [], False, [], [], False
+    def __init__(self, package_paths=None, recursive_paths=False, class_paths=None, class_names=None, recursive_classes=False):
+        self.package_paths, self.recursive_paths = list(package_paths or []), recursive_paths
+        self.class_paths, self.class_names, self.recursive_classes = list(class_paths or []), list(class_names or []), recursive_classes
+
+    def set_editor_property(self, n, v, *_):
+        raise Exception("ARFilter: Property '%s' cannot be edited on instances" % n)  # mirrors UE 5.8
 
 
 class AssetData(object):

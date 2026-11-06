@@ -33,18 +33,19 @@ def find_assets(ctx, a):
     cls = a.get("class")
     name = a.get("name")
     include = a.get("include") or []
+    compat.require_no_pie("asset search")
     reg = compat.asset_registry()
-    flt = unreal.ARFilter()
-    flt.set_editor_property("package_paths", [path])
-    flt.set_editor_property("recursive_paths", recursive)
+    kw = {"package_paths": [path], "recursive_paths": recursive}
     if cls:
         pycls = values.resolve_class(cls)
         tlap = compat.class_path(pycls)
         if tlap is not None:
-            flt.set_editor_property("class_paths", [tlap])
+            kw["class_paths"] = [tlap]
         else:
-            flt.set_editor_property("class_names", [getattr(pycls, "__name__", str(cls))])
-        flt.set_editor_property("recursive_classes", True)
+            kw["class_names"] = [getattr(pycls, "__name__", str(cls))]
+        kw["recursive_classes"] = True
+    # UE 5.8: ARFilter fields can't be set with set_editor_property, only via the constructor
+    flt = unreal.ARFilter(**kw)
     assets = list(reg.get_assets(flt))
     if name:
         pat = str(name).lower()

@@ -133,6 +133,30 @@ def _watchdog(timeout):
     return prof
 
 
+def _is_pie_obj(v):
+    try:
+        return isinstance(v, unreal.Object) and "UEDPIE_" in v.get_path_name()
+    except Exception:
+        return False
+
+
+def _scrub_pie_refs(ns):
+    """Python wrappers of PIE-world objects that outlive the play session have crashed the
+    editor's garbage collector (SIGBUS in _PyWeakref_ClearRef at EndPlayMap). Don't keep any."""
+    dropped = []
+    for k in list(ns.keys()):
+        v = ns[k]
+        bad = _is_pie_obj(v)
+        if not bad and isinstance(v, (list, tuple, set)):
+            bad = any(_is_pie_obj(x) for x in list(v)[:500])
+        elif not bad and isinstance(v, dict):
+            bad = any(_is_pie_obj(x) for x in list(v.values())[:500])
+        if bad:
+            del ns[k]
+            dropped.append(k)
+    return dropped
+
+
 @op("python", mutating=True, label=lambda a: "Python: %s" % (str(a.get("code", "")).strip().splitlines() or [""])[0][:60])
 def python(ctx, a):
     code = a.require("code")
@@ -170,6 +194,9 @@ def python(ctx, a):
     finally:
         sys.setprofile(old_prof)
         sys.stdout, sys.stderr = old_out, old_err
+        dropped = _scrub_pie_refs(ns)
+        if dropped:
+            ctx.warn("dropped play-in-editor objects from your session (%s): they die when play stops" % ", ".join(dropped[:8]))
     stdout = out.getvalue()
     stderr = err.getvalue()
     if failure is not None:

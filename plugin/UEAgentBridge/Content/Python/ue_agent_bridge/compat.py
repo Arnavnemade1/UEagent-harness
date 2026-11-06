@@ -272,6 +272,9 @@ def norm_asset_path(p):
 
 
 def asset_exists(path):
+    # EditorAssetLibrary refuses every call during PIE (and logs an error), which would
+    # otherwise look like "asset does not exist"
+    require_no_pie("asset operations")
     try:
         return bool(unreal.EditorAssetLibrary.does_asset_exist(path))
     except Exception:
