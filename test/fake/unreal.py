@@ -1197,12 +1197,16 @@ class EditorActorSubsystem(object):
 
 class UnrealEditorSubsystem(object):
     def get_editor_world(self):
+        if _pie_guard():
+            return None
         return _S["world"]
 
     def get_game_world(self):
         return _S["pie_world"] if _S["pie"] else None
 
     def get_level_viewport_camera_info(self):
+        if _pie_guard():
+            return None
         loc, rot = _S["camera"]
         return _copy.copy(loc), _copy.copy(rot)
 
@@ -1226,7 +1230,7 @@ class LevelEditorSubsystem(object):
         _write_log("LogPlayLevel", "Display", "PIE: play in editor ended")
 
     def editor_invalidate_viewports(self):
-        pass
+        _pie_guard()
 
     def editor_set_game_view(self, v):
         _S["game_view"] = v

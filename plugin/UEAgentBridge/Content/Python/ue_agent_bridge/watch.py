@@ -64,16 +64,16 @@ class Watcher(object):
 
     def _fast(self):
         emit = self.server.emit
-        level = compat.level_path()
-        if self.level is not None and level != self.level:
-            emit("level", {"path": level})
-        self.level = level
         pie = compat.is_pie()
         if self.pie is not None and pie != self.pie:
             emit("pie", {"state": "running" if pie else "stopped"})
         self.pie = pie
         if pie:
-            return  # selection APIs log errors during play; resume when it stops
+            return  # editor-world/selection APIs log errors during play; resume when it stops
+        level = compat.level_path()
+        if self.level is not None and level != self.level:
+            emit("level", {"path": level})
+        self.level = level
         key, acts = self._selection()
         if self.sel is not None and key != self.sel:
             emit("selection", {"count": len(acts), "actors": ["%s (%s)" % (_label(a), a.get_class().get_name()) for a in acts[:15]]})

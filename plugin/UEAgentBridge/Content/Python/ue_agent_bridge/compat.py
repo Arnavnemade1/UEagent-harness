@@ -60,12 +60,20 @@ def game_world():
     return None
 
 
+_last_level = [None]
+
+
 def level_path():
+    # get_editor_world() logs "The Editor is currently in a play mode." during PIE and
+    # returns None: report the level that was open when play started instead
+    if is_pie():
+        return _last_level[0]
     try:
         w = editor_world()
-        return w.get_path_name() if w is not None else None
+        _last_level[0] = w.get_path_name() if w is not None else None
     except Exception:
-        return None
+        _last_level[0] = None
+    return _last_level[0]
 
 
 def all_actors():
@@ -114,6 +122,8 @@ def is_pie():
 
 
 def invalidate_viewports():
+    if is_pie():
+        return
     s = level_subsystem()
     try:
         if s is not None and hasattr(s, "editor_invalidate_viewports"):
@@ -124,7 +134,7 @@ def invalidate_viewports():
 
 def camera():
     s = editor_subsystem()
-    if s is None:
+    if s is None or is_pie():  # editor viewport camera APIs log errors during PIE
         return None, None
     try:
         loc, rot = s.get_level_viewport_camera_info()

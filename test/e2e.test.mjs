@@ -227,7 +227,12 @@ describe('editor tools', () => {
     assert.match(edit.text[0], /pie_active/);
     const st = await claude.tool('ue_status');
     assert.match(JSON.stringify(st.json.selection), /unavailable during play/);
-    await claude.tool('ue_play', { action: 'stop' });
+    assert.equal(st.json.level, '/Game/Maps/Main.Main', 'level stays known during play');
+    await new Promise((res) => setTimeout(res, 600)); // let the watcher poll a few times mid-play
+    const stopped = await claude.tool('ue_play', { action: 'stop' });
+    assert.ok(!stopped.text.some((t) => /level changed → null/.test(t)), 'no bogus level change during play');
+    const logs = await claude.tool('ue_logs', { contains: 'currently in a play mode', severity: 'all' });
+    assert.equal(logs.json.matched, 0, `bridge caused PIE errors: ${logs.json.lines.join(' | ')}`);
   });
 
   it('reads filtered logs incrementally', async () => {
