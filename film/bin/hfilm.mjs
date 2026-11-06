@@ -7,11 +7,21 @@ import { fileURLToPath } from 'node:url';
 import { doctor } from '../src/doctor.mjs';
 import { inspect, preview, render } from '../src/render.mjs';
 import { bakeFilm, FilmError, loadFilm } from '../src/spec.mjs';
+import { preflight } from '../src/preflight.mjs';
+import { stopChildren } from '../src/process.mjs';
+import { ingest } from '../src/ingest.mjs';
+
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, async () => { await stopChildren(); process.exit(signal === 'SIGINT' ? 130 : 143); });
 
 const HELP = `hfilm: film-quality video from code
 
 Usage
+  hfilm ingest <file|https-url> -o asset.glb [--sha256 digest] [--max-mb 256] [--json]
+                                      stage media atomically with checksum and provenance; never executes downloads
+  hfilm preflight <film> [--quality preview|balanced|final] [--memory 4] [--json]
+                                      validate external media and estimate resources without launching a renderer
   hfilm render <film.mjs|film.json> [-o out.mp4] [--frames 0:150] [--samples 16] [--frames-dir dir] [--show] [--json]
+                   [--quality preview|balanced|final] [--memory 4] [--timeout 60]
   hfilm preview <film>                 live player with scrubber (toggle film quality on any frame)
   hfilm bake <film> [-o baked.json]    evaluate the film to per-frame tracks (for other renderers / debugging)
   hfilm ue plates <film> --project P.uproject --map /Game/Maps/Level [--hide Folder,Label,tag:T] [--holdouts Folder,...]
@@ -64,6 +74,7 @@ async function main() {
     let last = 0;
     const res = await render(file, {
       out: args.o, frames: range(args.frames), samples: args.samples ? +args.samples : undefined, framesDir: args['frames-dir'], show: args.show,
+      quality: args.quality, memoryGB: args.memory === undefined ? undefined : +args.memory, timeoutMin: args.timeout === undefined ? undefined : +args.timeout,
       onLog: (lvl, msg) => { if (lvl === 'error' || lvl === 'warn' || process.env.HFILM_DEBUG) process.stderr.write(`[page ${lvl}] ${msg}\n`); },
       onProgress: ({ index, count, ms }) => {
         if (json) return;
@@ -73,6 +84,14 @@ async function main() {
     });
     if (!json) process.stdout.write('\n');
     return say(res, `✓ ${res.output} (${res.frames} frames, ${res.size.join('x')}@${res.fps}, ${res.samples} samples/frame, ${res.avgFrameMs} ms/frame, ${res.seconds}s, ${res.gpu})`);
+  }
+  if (cmd === 'preflight') {
+    const r = await preflight(rest[0] || fail('preflight: missing <film> path'), { quality: args.quality, memoryGB: args.memory === undefined ? undefined : +args.memory, frames: range(args.frames), samples: args.samples === undefined ? undefined : +args.samples });
+    return say(r, JSON.stringify(r, null, 2));
+  }
+  if (cmd === 'ingest') {
+    const r = await ingest(rest[0] || fail('ingest: missing source'), { out: args.o, sha256: args.sha256, maxMB: args['max-mb'] === undefined ? undefined : +args['max-mb'] });
+    return say(r, JSON.stringify(r, null, 2));
   }
   if (cmd === 'preview') {
     const file = rest[0] || fail('preview: missing <film> path');
@@ -91,7 +110,7 @@ async function main() {
   }
   if (cmd === 'ue') {
     const { uePlates } = await import('../src/ue.mjs');
-    if (rest[0] !== 'plates') fail('ue: only "hfilm ue plates <film> ..." is supported');
+    if (rest[0] !== 'plates') fail('ue: only hfilm ue plates is supported');
     const res = await uePlates(rest[1] || fail('ue plates: missing <film> path'), {
       project: args.project, map: args.map, hide: args.hide, holdouts: args.holdouts, engine: args.engine, out: args.o,
       grid: args.grid, ground: args.ground, preset: args.preset, name: args.name, memoryGB: args.memory ? +args.memory : undefined,

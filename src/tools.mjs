@@ -364,11 +364,14 @@ const TOOLS = [
   {
     name: 'ue_film',
     title: 'Hybrid Film (UE plates + three.js)',
-    description: 'Film-quality video without a heavy Unreal render: Unreal renders the static world once ("plates": empty set from the film\'s cameras, plus holdouts, sun and the transforms of hidden actors), and three.js renders the moving actors in headless Chrome with motion blur, depth of field and soft shadows, composited over the plates. A film is a JS module (film.mjs) describing cameras/actors/motion. Commands: doctor; inspect {model} (clip ground speeds); bake/render {film}; plates {film, map, hide, holdouts, grid, ground}. plates runs a separate headless Unreal (writes /Game/HFilm assets, never modifies the source map) and takes minutes; render is seconds to minutes. See film/README.md.',
+    description: 'Film-quality video without a heavy Unreal render: Unreal renders the static world once ("plates": empty set from the film\'s cameras, plus holdouts, sun and the transforms of hidden actors), and three.js renders the moving actors in headless Chrome with motion blur, depth of field and soft shadows, composited over the plates. A film is a JS module (film.mjs) describing cameras/actors/motion. Commands: doctor; ingest {source,out} (bounded external media transfer with provenance); preflight {film,quality,memory} (media/resource checks without a renderer); inspect {model} (clip ground speeds); bake/render {film}; plates {film, map, hide, holdouts, grid, ground}. plates runs a separate headless Unreal (writes /Game/HFilm assets, never modifies the source map) and takes minutes; render is seconds to minutes. See film/README.md.',
     inputSchema: {
       type: 'object',
       properties: {
-        command: { type: 'string', enum: ['doctor', 'inspect', 'bake', 'render', 'plates'] },
+        command: { type: 'string', enum: ['doctor', 'inspect', 'ingest', 'preflight', 'bake', 'render', 'plates'] },
+        source: str('ingest: external media file path or HTTP(S) URL. Downloads are staged and validated without executing them.'),
+        sha256: str('ingest: optional expected SHA-256 digest.'),
+        max_mb: num('ingest: maximum transfer size in MiB (default 256; maximum 1024).'),
         film: str('Path to film.mjs / film.json (bake, render, plates).'),
         model: str('Path to a .glb (inspect).'),
         map: str('plates: Unreal map path, e.g. /Game/Maps/Level.'),
@@ -380,6 +383,9 @@ const TOOLS = [
         preset: str('plates: optional Movie Render Queue config asset to start from.'),
         frames: str('render/bake: start:end (end exclusive).'),
         samples: num('render: sub-frame samples per frame (default from the film, usually 16-32).'),
+        quality: { type: 'string', enum: ['preview', 'balanced', 'final'], description: 'render/preflight: explicit quality profile; never upscales authored resolution. Changes are reported.' },
+        memory: num('render/preflight/plates: process memory cap in GiB. Default render budget up to 4 GiB; plates default 7 GiB.'),
+        timeout: num('render/plates: maximum runtime in minutes; stops the owned worker on expiry.'),
         out: str('render: output .mp4 path.'),
         resume: { type: 'boolean', description: 'plates: continue an interrupted plate render from the last plate on disk (cameras must be unchanged).' },
       },
@@ -660,7 +666,7 @@ const HANDLERS = {
     return ok(s, res);
   },
 
-  async ue_film(s, a) {
+  async ue_film(s, a, ctx) {
     const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'film', 'bin', 'hfilm.mjs');
     if (!fs.existsSync(cli)) throw new BridgeError('film_missing', 'Hybrid Film is not installed next to the harness: expected film/bin/hfilm.mjs (run npm install in film/).');
     const need = (k) => { if (!a[k]) throw new BridgeError('bad_args', `ue_film ${a.command}: "${k}" is required`); return a[k]; };
@@ -668,21 +674,26 @@ const HANDLERS = {
     switch (a.command) {
       case 'doctor': args = ['doctor']; break;
       case 'inspect': args = ['inspect', need('model')]; break;
+      case 'ingest': args = ['ingest', need('source')]; need('out'); break;
+      case 'preflight': args = ['preflight', need('film')]; break;
       case 'bake': args = ['bake', need('film')]; break;
       case 'render': args = ['render', need('film')]; break;
       case 'plates': args = ['ue', 'plates', need('film'), '--project', needProject(s), '--map', need('map')]; break;
       default: throw new BridgeError('bad_args', `unknown ue_film command ${a.command}`);
     }
-    for (const k of ['hide', 'holdouts', 'grid', 'ground', 'name', 'preset', 'frames', 'samples']) if (a[k] != null && a.command !== 'doctor') args.push(`--${k}`, String(a[k]));
+    for (const k of ['hide', 'holdouts', 'grid', 'ground', 'name', 'preset', 'frames', 'samples', 'quality', 'memory', 'timeout']) if (a[k] != null && a.command !== 'doctor') args.push(`--${k}`, String(a[k]));
     if (a.out) args.push('-o', a.out);
+    if (a.sha256) args.push('--sha256', a.sha256);
+    if (a.max_mb !== undefined) args.push('--max-mb', String(a.max_mb));
     if (a.resume && a.command === 'plates') args.push('--resume');
     args.push('--json');
-    const timeout = a.command === 'plates' ? 3 * 3600e3 : a.command === 'render' ? 3600e3 : 300e3;
-    const res = await new Promise((resolve) => execFile(process.execPath, [cli, ...args], { timeout, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => resolve({ err, stdout, stderr })));
+    if (a.timeout !== undefined && (!Number.isFinite(a.timeout) || a.timeout <= 0 || a.timeout > 1440)) throw new BridgeError('bad_args', 'timeout must be positive minutes, at most 1440');
+    const timeout = (a.command === 'plates' ? 30 + (a.timeout ?? 120) : a.command === 'render' ? (a.timeout ?? 60) : 5) * 60000 + 15000;
+    const res = await new Promise((resolve) => execFile(process.execPath, [cli, ...args], { timeout, signal: ctx.signal, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => resolve({ err, stdout, stderr })));
     const line = String(res.stdout).trim().split('\n').filter((l) => l.startsWith('{')).pop();
     let out;
     try { out = JSON.parse(line); } catch { out = { ok: false, error: (res.err?.message || 'no output') + `\n${String(res.stderr).slice(-2000)}` }; }
-    if (!out.ok) throw new BridgeError('film_failed', out.error || 'hfilm failed');
+    if (res.err || !out.ok) throw new BridgeError('film_failed', out.error || res.err?.message || 'hfilm failed');
     return ok(s, out, { digest: false });
   },
 

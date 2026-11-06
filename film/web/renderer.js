@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 
 const L = { ACTOR: 1, HOLDOUT: 2, CATCHER: 3, LIGHT_FULL: 4, LIGHT_STATIC: 5, AMBIENT: 6 };
@@ -129,13 +130,15 @@ export async function createFilm(canvas, spec, { onLog = console.log } = {}) {
 
   // ---- environment & lights
   if (spec.environment?.hdri) {
-    const tex = await new RGBELoader().loadAsync(spec.environment.hdri);
+    const EnvLoader = /\.exr$/i.test(spec.environment.hdri) ? EXRLoader : RGBELoader;
+    const tex = await new EnvLoader().loadAsync(spec.environment.hdri);
     tex.mapping = THREE.EquirectangularReflectionMapping;
     const pmrem = new THREE.PMREMGenerator(renderer);
     scene.environment = pmrem.fromEquirectangular(tex).texture;
     scene.environmentIntensity = spec.environment.intensity ?? 1;
     scene.environmentRotation.y = THREE.MathUtils.degToRad(spec.environment.rotation || 0);
     if (spec.environment.background && !plateMode) { scene.background = tex; scene.backgroundRotation.y = scene.environmentRotation.y; scene.backgroundIntensity = spec.environment.intensity ?? 1; }
+    if (!spec.environment.background || plateMode) tex.dispose();
     pmrem.dispose();
   }
   const amb = spec.ambient || {};
@@ -251,7 +254,16 @@ export async function createFilm(canvas, spec, { onLog = console.log } = {}) {
         clearcoat: mp.clearcoat ?? 0, clearcoatRoughness: mp.clearcoatRoughness ?? 0.2,
         emissive: mp.emissive || '#000000', emissiveIntensity: mp.emissiveIntensity ?? 1,
       });
-      if (mp.map) { mat.map = await texLoader.loadAsync(mp.map); mat.map.colorSpace = THREE.SRGBColorSpace; mat.map.anisotropy = 8; }
+      for (const field of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap', 'alphaMap']) {
+        if (!mp[field]) continue;
+        const texture = await texLoader.loadAsync(mp[field]);
+        texture.colorSpace = ['map', 'emissiveMap'].includes(field) ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+        texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+        mat[field] = texture;
+      }
+      if (mp.normalScale) mat.normalScale.fromArray(mp.normalScale);
+      if (mp.aoMap) mat.aoMapIntensity = mp.aoMapIntensity ?? 1;
+      if (mp.alphaMap) { mat.alphaTest = mp.alphaTest ?? 0.5; mat.transparent = mp.transparent ?? false; }
       root = new THREE.Mesh(geo, mat);
     }
     root.traverse((o) => {
