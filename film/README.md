@@ -87,7 +87,7 @@ World units: metres, +Y up, right-handed (glTF / three.js). `anim.ue` converts f
 | `cuts: [frame, …]` | camera cuts: no interpolation or motion blur across them |
 | `render` | `samples` (16), `shutter` (0.5 = 180°), `toneMapping` (`agx`, `aces`, `neutral`, `none`), `exposure`, `dof`, `bitrate` |
 | `camera: (f) => ({…})` | `position`, `target` (or `quaternion`), `up`, `fov` (vertical°) or `focalLength` (mm) + `sensorWidth` (36), `focusDistance` (m; defaults to the target distance), `fStop` |
-| `actors: [{…}]` | `id`; `model`: `'file.glb'` or `{ primitive: sphere \| box \| cylinder \| plane, …, material }`; `tint: { MaterialName \| '*': '#hex' }`; `transform: (f) => ({ position, yaw \| rotation [x,y,z]° \| quaternion, scale })`; `animation: (f) => [{ clip, time, weight }]` (blend any clips); `visible: (f) => bool`; `castShadow`, `receiveShadow` |
+| `actors: [{…}]` | `id`; `model`: `'file.glb'` or `{ primitive: sphere \| box \| cylinder \| plane, …, material }`; `tint: { MaterialName \| '*': '#hex' }`; `transform: (f) => ({ position, yaw \| rotation [x,y,z]° \| quaternion, scale })`; `animation: (f) => [{ clip, time, weight }]` (blend any clips); `pose: (f) => ({ boneName: [x,y,z]° })` (additive rotations in the actor's own frame, +X = its left, so they work on any rig); `visible: (f) => bool`; `castShadow`, `receiveShadow` |
 | `sun` | `direction` (toward the light) or `elevation` + `azimuth`; `color`, `intensity`, `softness` (degrees), `shadowMapSize` |
 | `ambient` | hemisphere fill: `sky`, `ground`, `intensity`; `fromPlate: true` samples the plate |
 | `environment` | `{ hdri: 'sky.hdr', intensity, background, rotation }` image-based lighting |
@@ -101,6 +101,31 @@ Motion helpers (`anim`): `keys` (Catmull-Rom, linear or hold keyframes with per-
 `arc`, `smooth` (critically damped follow with an exact lag in frames), `handheld`, `lookAt`, `yaw`,
 `noise`, `kelvin`, `ue.pos / ue.toUE / ue.dir / ue.quat`. A film module also receives `json(path,
 fallback)` and `THREE`.
+
+## Real sports data (`sports`)
+
+Hand-animating a match looks wrong: the ball floats between invented points and nobody touches it.
+Instead, a film can take player movement from real tracking data and rebuild everything else from it.
+The module is passed to film modules as `sports`, and is also importable as `hybrid-film/sports`.
+
+| helper | what it does |
+|---|---|
+| `loadSkillCorner({ dir, id, from, to })` | a window of a [SkillCorner open data](https://github.com/SkillCorner/opendata) match (10 fps tracking + possession events) in a provider-neutral shape |
+| `playerTracks(match)` | smoothed, continuous paths per player (`at(t)`, `vel(t)`), with gaps bridged |
+| `physicalBall(match, tracks)` | a ball that only moves when someone touches it (see below); returns `at(t)`, `touches`, `goals` |
+| `locomotion(track, { clips, look, aim })` | idle / walk / jog / sprint blended from real speed, stride-matched; facing follows motion or the ball |
+| `touchPose(t, touches)`, `footFor`, `armsUpPose`, `addPoses` | procedural kicks, first touches, dribble touches and celebrations as additive bone poses |
+| `extendTracks(tracks, { from, to, plan })` | continue paths past the end of the data with physical steering (e.g. walk back for the restart) |
+
+How the ball is rebuilt:
+- Each possession gives a first touch, dribble touches and a release, all at the player's foot.
+- Ground passes roll with grass friction and arrive at the receiver's feet.
+- High passes, and balls the tracking saw in the air, fly under gravity. If the tracking saw a lower
+  ball, it flies, lands and runs on.
+- Shots that reached the goal mouth die in the net.
+
+Measured against the tracked ball, the rebuilt ball's median error was 1.4–1.8 m across two real goals.
+`Film/realmatch/film.mjs` in the AgentSandbox project is a full 70 s example built this way.
 
 ## Hybrid with Unreal Engine
 

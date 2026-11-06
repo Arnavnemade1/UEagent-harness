@@ -14,6 +14,7 @@ const vec = (v, n, where) => {
 };
 const r5 = (x) => Math.round(x * 1e5) / 1e5;
 const rv = (a) => a.map(r5);
+const rq = (q) => q.map((x) => Math.round(x * 1e8) / 1e8);   // rotations need more precision than positions
 
 export async function loadFilm(file) {
   const abs = path.resolve(file);
@@ -25,7 +26,7 @@ export async function loadFilm(file) {
     film = mod.default ?? mod.film;
     const d = path.dirname(abs);
     const json = (rel, fallback) => { const p = path.resolve(d, rel); return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : fallback; };
-    if (isFn(film)) film = await film({ dir: d, anim: await import('./anim.mjs'), THREE, json });
+    if (isFn(film)) film = await film({ dir: d, anim: await import('./anim.mjs'), sports: await import('./sports.mjs'), THREE, json });
   }
   if (!film || typeof film !== 'object') fail(`${file}: the module must export default a film object (or a function returning one)`);
   return { film, dir: path.dirname(abs), file: abs };
@@ -130,7 +131,7 @@ export function bakeFilm({ film, dir }, { frames, samples, ignorePlate = false }
   const cam = { position: [], quaternion: [], fov: [], focus: [], fstop: [], sensorHeight: 0 };
   for (let f = start; f < end; f++) {
     const c = camState(camFn(f), f, aspect, 'camera');
-    cam.position.push(rv(c.pos)); cam.quaternion.push(rv(c.q)); cam.fov.push(r5(c.fov)); cam.focus.push(r5(c.focus)); cam.fstop.push(r5(c.fstop));
+    cam.position.push(rv(c.pos)); cam.quaternion.push(rq(c.q)); cam.fov.push(r5(c.fov)); cam.focus.push(r5(c.focus)); cam.fstop.push(r5(c.fstop));
     cam.sensorHeight = c.sensorH;
   }
   if (!cam.fstop.some((v) => v > 0)) delete cam.fstop;
@@ -153,14 +154,21 @@ export function bakeFilm({ film, dir }, { frames, samples, ignorePlate = false }
     const out = { id: a.id || `actor${idx}`, model, tint: a.tint, castShadow: a.castShadow, receiveShadow: a.receiveShadow, position: [], quaternion: [], scale: [] };
     if (a.animation) out.anim = [];
     if (isFn(a.visible)) out.visible = [];
+    if (isFn(a.pose)) out.pose = [];
     for (let f = start; f < end; f++) {
       const t = xform(tf(f), f, `${where}.transform`);
-      out.position.push(rv(t.p)); out.quaternion.push(rv(t.q)); out.scale.push(rv(t.s));
+      out.position.push(rv(t.p)); out.quaternion.push(rq(t.q)); out.scale.push(rv(t.s));
       if (a.animation) {
         const list = isFn(a.animation) ? a.animation(f) : a.animation;
         out.anim.push((list || []).map((x) => [x.clip, r5(x.time ?? f / fps), x.weight ?? 1]));
       }
       if (out.visible) out.visible.push(a.visible(f) ? 1 : 0);
+      if (out.pose) {   // additive bone rotations in the actor's own frame (degrees), sparse per frame
+        const p = a.pose(f) || {}, o = {};
+        // bone names as three.js stores them (glTF names minus . : / [ ], spaces -> _)
+        for (const [bone, v] of Object.entries(p)) { vec(v, 3, `${where}.pose['${bone}']`); if (v.some((x) => Math.abs(x) > 0.01)) o[bone.replace(/\s/g, '_').replace(/[\[\].:/]/g, '')] = v.map(r5); }
+        out.pose.push(o);
+      }
     }
     return out;
   });

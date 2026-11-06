@@ -56,7 +56,17 @@ function catmull(p0, p1, p2, p3, t) {
 const _qa = new THREE.Quaternion(), _qb = new THREE.Quaternion();
 function sampleVec(arr, loc) { const [a, b, c, d, t] = loc; return catmull(arr[a], arr[b], arr[c], arr[d], t); }
 function sampleNum(arr, loc) { const [, b, c, , t] = loc; return arr[b] + (arr[c] - arr[b]) * t; }
-function sampleQuat(arr, loc, out) { const [, b, c, , t] = loc; _qa.fromArray(arr[b]); _qb.fromArray(arr[c]); return out.slerpQuaternions(_qa, _qb, t); }
+// Baked quaternions are rounded, so not exactly unit length: three.js slerp then treats two nearby
+// rotations (dot >= 1) as identical and holds the first, which split motion-blur samples between two
+// frames' cameras (double images on slow pans). Normalise, take the short way, nlerp when nearly equal.
+function sampleQuat(arr, loc, out) {
+  const [, b, c, , t] = loc;
+  _qa.fromArray(arr[b]).normalize(); _qb.fromArray(arr[c]).normalize();
+  let d = _qa.dot(_qb);
+  if (d < 0) { _qb.set(-_qb.x, -_qb.y, -_qb.z, -_qb.w); d = -d; }
+  if (d > 0.9995) return out.set(_qa.x + (_qb.x - _qa.x) * t, _qa.y + (_qb.y - _qa.y) * t, _qa.z + (_qb.z - _qa.z) * t, _qa.w + (_qb.w - _qa.w) * t).normalize();
+  return out.slerpQuaternions(_qa, _qb, t);
+}
 
 // ---------------------------------------------------------------- shaders
 const QUAD_VS = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
@@ -250,7 +260,11 @@ export async function createFilm(canvas, spec, { onLog = console.log } = {}) {
     });
     root.matrixAutoUpdate = true;
     scene.add(root);
-    actors.push({ spec: a, root, mixer, actions });
+    // bones by name, parents before children, for additive poses
+    const bones = {}, depth = (o) => { let d = 0; while (o.parent) { d++; o = o.parent; } return d; };
+    root.traverse((o) => { if (o.isBone) bones[o.name] = o; });
+    const poseOrder = Object.keys(bones).sort((x, y) => depth(bones[x]) - depth(bones[y]));
+    actors.push({ spec: a, root, mixer, actions, bones, poseOrder, restore: [] });
   }
 
   // ---- camera & render targets
@@ -295,10 +309,39 @@ export async function createFilm(canvas, spec, { onLog = console.log } = {}) {
   const _v = new THREE.Vector3(), _right = new THREE.Vector3(), _up = new THREE.Vector3(), _q = new THREE.Quaternion();
   const box = new THREE.Box3(), sphere = new THREE.Sphere();
 
+  // Additive pose: per bone [x, y, z] degrees, a rotation expressed in the actor's own frame (+Z forward,
+  // +Y up, +X the character's left) applied about the bone's pivot after the clips. Rig-independent:
+  // "swing the right thigh 40 degrees forward" is { 'DEF-thigh.R': [-40, 0, 0] } on any skeleton.
+  const _pe = new THREE.Euler(), _pq = new THREE.Quaternion(), _pr = new THREE.Quaternion(), _pri = new THREE.Quaternion(), _pp = new THREE.Quaternion();
+  const D2R = Math.PI / 180, NO = [0, 0, 0];
+  function applyPose(act, pose, loc) {
+    const [, i1, i2, , u] = loc;
+    const p1 = pose[i1] || {}, p2 = pose[i2] || {};
+    let any = false;
+    for (const k in p1) { any = true; break; }
+    if (!any) for (const k in p2) { any = true; break; }
+    if (!any) return;
+    act.root.getWorldQuaternion(_pr); _pri.copy(_pr).invert();
+    for (const name of act.poseOrder) {
+      const v1 = p1[name], v2 = p2[name];
+      if (!v1 && !v2) continue;
+      const b = act.bones[name], a1 = v1 || NO, a2 = v2 || NO;
+      _pe.set((a1[0] + (a2[0] - a1[0]) * u) * D2R, (a1[1] + (a2[1] - a1[1]) * u) * D2R, (a1[2] + (a2[2] - a1[2]) * u) * D2R, 'YXZ');
+      _pq.setFromEuler(_pe).premultiply(_pr).multiply(_pri);           // actor-frame rotation -> world
+      b.parent.getWorldQuaternion(_pp);
+      _pq.premultiply(_pp.clone().invert()).multiply(_pp);             // world -> bone-parent frame
+      act.restore.push([b, b.quaternion.clone()]);   // the mixer skips bones whose clip value didn't change,
+      b.quaternion.premultiply(_pq);                 // so undo the pose before the next sample
+      b.updateMatrixWorld(true);
+    }
+  }
+
   function placeActors(frame, t) {
     const loc = timeline.locate(frame, t);
     for (const act of actors) {
       const a = act.spec;
+      for (const [bone, q] of act.restore) bone.quaternion.copy(q);
+      act.restore.length = 0;
       act.root.position.fromArray(sampleVec(a.position, loc));
       sampleQuat(a.quaternion, loc, act.root.quaternion);
       act.root.scale.fromArray(sampleVec(a.scale, loc));
@@ -326,6 +369,7 @@ export async function createFilm(canvas, spec, { onLog = console.log } = {}) {
         act.mixer.update(0);
       }
       act.root.updateMatrixWorld(true);
+      if (a.pose) applyPose(act, a.pose, loc);
     }
     return loc;
   }

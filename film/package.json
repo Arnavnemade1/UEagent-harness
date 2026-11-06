@@ -6,6 +6,14 @@
   "bin": {
     "hfilm": "bin/hfilm.mjs"
   },
+  "exports": {
+    ".": "./src/render.mjs",
+    "./render": "./src/render.mjs",
+    "./anim": "./src/anim.mjs",
+    "./spec": "./src/spec.mjs",
+    "./sports": "./src/sports.mjs",
+    "./package.json": "./package.json"
+  },
   "engines": {
     "node": ">=22"
   },
