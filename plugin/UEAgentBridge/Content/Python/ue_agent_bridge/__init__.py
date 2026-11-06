@@ -5,6 +5,7 @@ and is pumped from the Slate tick, so every engine call happens on the game
 thread and nothing needs compiling.
 """
 import os
+import re
 
 import unreal
 
@@ -18,7 +19,12 @@ def _is_commandlet():
         cmd = unreal.SystemLibrary.get_command_line().lower()
     except Exception:
         return False
-    return "-run=" in cmd or ("-nullrhi" in cmd and "-unattended" in cmd)
+    # Standalone MRQ uses -game. It loads Python plugins too, but has no editor
+    # world: registering the editor's Slate/watch callbacks there can crash.
+    # Match switches, not project/directory names containing e.g. "-game".
+    switches = re.findall(r'(?:^|\s)-(\w+)(?==|\s|$)', cmd)
+    return ("run" in switches or "game" in switches or "server" in switches
+            or ("nullrhi" in switches and "unattended" in switches))
 
 
 def get_server():
@@ -27,7 +33,7 @@ def get_server():
 
 def start(port=None, token=None):
     """Start (or restart) the bridge. Safe to call repeatedly."""
-    if _is_commandlet():
+    if os.environ.get("UE_AGENT_BRIDGE_DISABLE", "").lower() in ("1", "true", "yes") or _is_commandlet():
         return None
     old = get_server()
     if old is not None:
