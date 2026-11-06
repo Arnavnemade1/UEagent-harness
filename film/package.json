@@ -1,0 +1,20 @@
+{
+  "name": "hybrid-film",
+  "version": "0.1.0",
+  "description": "Film-quality video from code: three.js motion rendered offline in headless Chrome, optionally composited over plates from Unreal Engine (or any renderer).",
+  "type": "module",
+  "bin": {
+    "hfilm": "bin/hfilm.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "mp4-muxer": "^5.1.5",
+    "three": "^0.170.0"
+  },
+  "license": "MIT"
+}
