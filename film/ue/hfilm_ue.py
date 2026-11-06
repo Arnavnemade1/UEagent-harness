@@ -68,9 +68,50 @@ def film_matrix(tf, center, size):
     return [cx[0], cx[1], cx[2], 0, cy[0], cy[1], cy[2], 0, cz[0], cz[1], cz[2], 0, px, py, pz, 1]
 
 
+MESH_TRI_BUDGET = 400000
+
+
+def _translucent(m):
+    try:
+        base = m.get_base_material() if hasattr(m, "get_base_material") else m
+        return base.get_editor_property("blend_mode") in (unreal.BlendMode.BLEND_TRANSLUCENT, unreal.BlendMode.BLEND_ADDITIVE, unreal.BlendMode.BLEND_MODULATE)
+    except Exception:
+        return False
+
+
+def mesh_holdout(comp, mesh, budget):
+    """Real triangles of a custom static mesh (world space, film metres), skipping translucent sections."""
+    lib = getattr(unreal, "ProceduralMeshLibrary", None)
+    if lib is None:
+        return None
+    tf = comp.get_world_transform()
+    pos, idx = [], []
+    try:
+        n = mesh.get_num_sections(0)
+    except Exception:
+        return None
+    for s in range(n):
+        mat = comp.get_material(s)
+        if mat and _translucent(mat):
+            continue
+        r = lib.get_section_from_static_mesh(mesh, 0, s)
+        verts, tris = r[0], r[1]
+        if len(idx) + len(tris) > budget * 3:
+            return None
+        base = len(pos) // 3
+        for v in verts:
+            w = tf.transform_location(v)
+            pos += [round(w.x / 100.0, 3), round(w.z / 100.0, 3), round(w.y / 100.0, 3)]
+        # Unreal (left-handed, cm) -> film (right-handed): swapping y/z mirrors, so flip the winding
+        for k in range(0, len(tris), 3):
+            idx += [base + tris[k], base + tris[k + 2], base + tris[k + 1]]
+    return {"shape": "mesh", "positions": pos, "indices": idx} if idx else None
+
+
 def export_holdouts(actors):
     grid = JOB.get("grid") or {}
     out = []
+    budget = [MESH_TRI_BUDGET]
     for a in actors:
         if not matches(a, JOB.get("holdouts", [])):
             continue
@@ -79,6 +120,13 @@ def export_holdouts(actors):
             if not mesh or not comp.is_visible():
                 continue
             path = mesh.get_path_name().split(".")[0]
+            if path not in BASIC and not isinstance(comp, unreal.InstancedStaticMeshComponent):
+                h = mesh_holdout(comp, mesh, budget[0])
+                if h:
+                    budget[0] -= len(h["indices"]) // 3
+                    h["source"] = a.get_actor_label()
+                    out.append(h)
+                    continue
             shape = BASIC.get(path, "box")
             if shape == "box" and path not in BASIC:
                 bb = mesh.get_bounding_box()

@@ -28,6 +28,13 @@ with other agents.
    recent transaction, which might not be yours.
 5. Save deliberately. Asset ops save by default. Levels need `ue_save` (or ask the user first).
 
+**Video and the shared production library:** `ue_film` makes film-quality video (Unreal plates +
+three.js actors). Before building characters, motion or a stadium from scratch, call `ue_film` with
+`command: "library"`: the harness ships athletes with procedural kits (names, numbers, patterns),
+rig-neutral motion (real captured soccer kicks, runs, celebrations, gestures; works on any humanoid)
+and a stadium generator (`command: "stadium"`, presets `oculus` and `classic`). Use and extend these
+rather than one-off assets; anything added to `film/library` is available to every agent.
+
 **Conventions:** units are centimetres and degrees. `rotation` is `[pitch, yaw, roll]`. Assets
 are `/Game/Folder/Name`. An actor target can be a label, a wildcard (`Wall_*`), `@selected`, an
 actor path, or `$N` (the actors created by op N in the same batch).

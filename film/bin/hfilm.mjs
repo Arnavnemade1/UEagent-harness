@@ -7,17 +7,31 @@ import { fileURLToPath } from 'node:url';
 import { doctor } from '../src/doctor.mjs';
 import { inspect, preview, render } from '../src/render.mjs';
 import { bakeFilm, FilmError, loadFilm } from '../src/spec.mjs';
+import { preflight } from '../src/preflight.mjs';
+import { stopChildren } from '../src/process.mjs';
+import { ingest } from '../src/ingest.mjs';
+
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, async () => { await stopChildren(); process.exit(signal === 'SIGINT' ? 130 : 143); });
 
 const HELP = `hfilm: film-quality video from code
 
 Usage
+  hfilm ingest <file|https-url> -o asset.glb [--sha256 digest] [--max-mb 256] [--json]
+                                      stage media atomically with checksum and provenance; never executes downloads
+  hfilm preflight <film> [--quality preview|balanced|final] [--memory 4] [--json]
+                                      validate external media and estimate resources without launching a renderer
   hfilm render <film.mjs|film.json> [-o out.mp4] [--frames 0:150] [--samples 16] [--frames-dir dir] [--show] [--json]
+                   [--quality preview|balanced|final] [--memory 4] [--timeout 60]
   hfilm preview <film>                 live player with scrubber (toggle film quality on any frame)
   hfilm bake <film> [-o baked.json]    evaluate the film to per-frame tracks (for other renderers / debugging)
   hfilm ue plates <film> --project P.uproject --map /Game/Maps/Level [--hide Folder,Label,tag:T] [--holdouts Folder,...]
                     [--grid MaterialName] [--ground ActorLabel] [--preset /Game/.../MRQConfig] [--memory 9] [--name shot] [--skip-render]
                     [--resume] [--timeout 120]
                                        render background plates + holdouts + sun from Unreal for this film's cameras
+  hfilm ue stadium --project P.uproject --map /Game/HFilm/Stadiums/Oculus [--preset oculus|classic] [--config overrides.json]
+                    [--home REDS --away WHITES]
+                                       generate a complete stadium level (bowl, roof, crowd, lights, city) headless
+  hfilm library                        shared athletes, kits, motion clips (kicks, celebrations, gaits) and stadium presets
   hfilm inspect <model.glb>            clips, durations, ground speed (m/s) per clip, height, facing
   hfilm init <dir> [--template basic|soccer-goal]
   hfilm doctor [--json]                check Chrome, GPU, H.264, Unreal
@@ -64,6 +78,7 @@ async function main() {
     let last = 0;
     const res = await render(file, {
       out: args.o, frames: range(args.frames), samples: args.samples ? +args.samples : undefined, framesDir: args['frames-dir'], show: args.show,
+      quality: args.quality, memoryGB: args.memory === undefined ? undefined : +args.memory, timeoutMin: args.timeout === undefined ? undefined : +args.timeout,
       onLog: (lvl, msg) => { if (lvl === 'error' || lvl === 'warn' || process.env.HFILM_DEBUG) process.stderr.write(`[page ${lvl}] ${msg}\n`); },
       onProgress: ({ index, count, ms }) => {
         if (json) return;
@@ -73,6 +88,14 @@ async function main() {
     });
     if (!json) process.stdout.write('\n');
     return say(res, `✓ ${res.output} (${res.frames} frames, ${res.size.join('x')}@${res.fps}, ${res.samples} samples/frame, ${res.avgFrameMs} ms/frame, ${res.seconds}s, ${res.gpu})`);
+  }
+  if (cmd === 'preflight') {
+    const r = await preflight(rest[0] || fail('preflight: missing <film> path'), { quality: args.quality, memoryGB: args.memory === undefined ? undefined : +args.memory, frames: range(args.frames), samples: args.samples === undefined ? undefined : +args.samples });
+    return say(r, JSON.stringify(r, null, 2));
+  }
+  if (cmd === 'ingest') {
+    const r = await ingest(rest[0] || fail('ingest: missing source'), { out: args.o, sha256: args.sha256, maxMB: args['max-mb'] === undefined ? undefined : +args['max-mb'] });
+    return say(r, JSON.stringify(r, null, 2));
   }
   if (cmd === 'preview') {
     const file = rest[0] || fail('preview: missing <film> path');
@@ -90,8 +113,14 @@ async function main() {
     return say({ ok: true, output: outPath, frames: baked.end - baked.start }, `✓ ${outPath} (${baked.end - baked.start} frames, ${baked.actors.length} actors)`);
   }
   if (cmd === 'ue') {
-    const { uePlates } = await import('../src/ue.mjs');
-    if (rest[0] !== 'plates') fail('ue: only "hfilm ue plates <film> ..." is supported');
+    const { uePlates, ueStadium } = await import('../src/ue.mjs');
+    if (rest[0] === 'stadium') {
+      const res = await ueStadium({ project: args.project, map: args.map, preset: args.preset, config: args.config, homeName: args.home, awayName: args.away,
+        assetDir: args['asset-dir'], engine: args.engine, memoryGB: args.memory ? +args.memory : undefined, timeoutMin: args.timeout ? +args.timeout : undefined,
+        log: (m) => { if (!json) console.log(m); } });
+      return say(res, `✓ ${res.map} (${res.preset}, ${res.seconds}s)\n${res.log.map((l) => `  ${l}`).join('\n')}\n  plates: --hide "" --holdouts "${res.folders.holdouts.join(',')}" --grid ${res.folders.grid} --ground ${res.folders.ground}`);
+    }
+    if (rest[0] !== 'plates') fail('ue: "hfilm ue plates <film> ..." or "hfilm ue stadium --project P --map /Game/..."');
     const res = await uePlates(rest[1] || fail('ue plates: missing <film> path'), {
       project: args.project, map: args.map, hide: args.hide, holdouts: args.holdouts, engine: args.engine, out: args.o,
       grid: args.grid, ground: args.ground, preset: args.preset, name: args.name, memoryGB: args.memory ? +args.memory : undefined,
@@ -100,6 +129,16 @@ async function main() {
       log: (m) => { if (!json) console.log(m); },
     });
     return say(res, `✓ plates: ${res.plates}\n✓ holdouts: ${res.holdouts} (${res.holdoutCount})\n✓ sun: ${JSON.stringify(res.sun)}`);
+  }
+  if (cmd === 'library') {
+    const { libraryIndex } = await import('../src/athletes.mjs');
+    const r = libraryIndex();
+    if (json) return console.log(JSON.stringify({ ok: true, ...r }));
+    console.log(`athletes: ${r.athletes.join(', ')}\nkits: ${r.kits.join(', ')} (patterns: ${r.kitOptions.pattern.join(', ')})\nstadiums (hfilm ue stadium --preset): ${r.stadiums.join(', ')}`);
+    const by = {};
+    for (const c of r.clips) (by[c.kind] ||= []).push(c.name + (c.contact ? `@${c.contact}s` : '') + (c.stride_m ? ` ${c.stride_m}m` : ''));
+    for (const [k, v] of Object.entries(by)) console.log(`${k}: ${v.join(', ')}`);
+    return console.log(`docs: ${r.docs}`);
   }
   if (cmd === 'inspect') {
     const r = await inspect(rest[0] || fail('inspect: missing <model.glb>'));

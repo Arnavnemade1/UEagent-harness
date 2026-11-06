@@ -304,7 +304,7 @@ export function extendTracks(tracks, { from, to, plan, accel = 2.5, step = 1 / 6
 export function armsUpPose(t, t0, t1, { bones = {} } = {}) {
   const w = smoothstep(t0, t0 + 0.25, t) * (1 - smoothstep(t1 - 0.35, t1, t));
   if (w <= 0) return {};
-  const B = { armL: 'DEF-upper_arm.L', armR: 'DEF-upper_arm.R', foreL: 'DEF-forearm.L', foreR: 'DEF-forearm.R', ...bones };
+  const B = { armL: 'upperarm_l', armR: 'upperarm_r', foreL: 'lowerarm_l', foreR: 'lowerarm_r', ...bones };
   return { [B.armL]: [0, 0, 145 * w], [B.armR]: [0, 0, -145 * w], [B.foreL]: [0, 0, 20 * w], [B.foreR]: [0, 0, -20 * w] };
 }
 
@@ -318,21 +318,30 @@ export function addPoses(...poses) {
 // ------------------------------------------------------------------ locomotion
 
 /**
- * Locomotion clips from real motion. `clips` maps gait -> { clip, dur, stride } (stride = metres per
- * clip cycle). Facing follows velocity when moving, otherwise `look(t)` (e.g. the ball); `aim` can
- * pull the body toward a direction around kicks. Precomputed on a fixed step over [t0, t1].
- * Returns { heading(t) (radians, film yaw: 0 = +film z = +data y), clips(t) -> [{ clip, time, weight }] }.
+ * Locomotion from a track. `clips` maps gait -> { clip, dur, stride } (stride = metres per clip
+ * cycle): idle, walk, jog, run, sprint (forward) and optionally back, left, right (moving while
+ * facing elsewhere). Players run facing where they go; below `faceBall` m/s they keep facing
+ * `look(t)` (e.g. the ball) and backpedal or side-step instead. `aim` pulls the body toward a
+ * direction around kicks. Also returns body lean from acceleration and turning.
+ * heading(t) is the film yaw in radians (0 = +film z = +data y).
  */
-export function locomotion(track, { t0, t1, clips, look = null, aim = null, step = 1 / 60, seed = 0 }) {
+export function locomotion(track, { t0, t1, clips, look = null, aim = null, step = 1 / 60, seed = 0, faceBall = 3.2, turnRate = 9 }) {
   const n = Math.max(2, Math.ceil((t1 - t0) / step) + 1);
-  const H = new Float64Array(n), PH = new Float64Array(n), V = new Float64Array(n);
-  let heading = null, phase = (seed * 0.37) % 1;
-  const order = ['walk', 'jog', 'sprint'].filter((g) => clips[g]);
+  const H = new Float64Array(n), PH = new Float64Array(n), V = new Float64Array(n), REL = new Float64Array(n), PITCH = new Float64Array(n), ROLL = new Float64Array(n);
+  let heading = null, phase = (seed * 0.37) % 1, pv = 0, pitch = 0, roll = 0;
+  const directional = !!(clips.back || clips.left || clips.right);
   for (let i = 0; i < n; i++) {
     const t = t0 + i * step, [vx, vy] = track.vel(t), v = hyp(vx, vy), p = track.at(t);
-    let want = v > 1.0 ? Math.atan2(vx, vy) : null;
-    if (want == null && look) { const q = look(t); if (q) want = Math.atan2(q[0] - p[0], q[1] - p[1]); }
-    if (want == null) want = heading ?? 0;
+    const velYaw = v > 0.05 ? Math.atan2(vx, vy) : null;
+    let lookYaw = null;
+    if (look) { const q = look(t); if (q && hyp(q[0] - p[0], q[1] - p[1]) > 0.3) lookYaw = Math.atan2(q[0] - p[0], q[1] - p[1]); }
+    let want;
+    if (velYaw != null && v > 1.0 && (!directional || lookYaw == null || v > faceBall)) want = velYaw;
+    else if (velYaw != null && v > 0.6 && directional && lookYaw != null) {
+      // moving slowly while watching the ball: face it unless it is roughly where we're going anyway
+      const d = Math.abs(Math.atan2(Math.sin(velYaw - lookYaw), Math.cos(velYaw - lookYaw)));
+      want = d > 0.9 ? lookYaw : velYaw;
+    } else want = lookYaw ?? heading ?? velYaw ?? 0;
     const pull = aim ? aim(t) : null;      // { dir: [x,y], w }
     if (pull && pull.w > 0) {
       const ay = Math.atan2(pull.dir[0], pull.dir[1]);
@@ -340,35 +349,126 @@ export function locomotion(track, { t0, t1, clips, look = null, aim = null, step
     }
     if (heading == null) heading = want;
     let dA = want - heading; dA = Math.atan2(Math.sin(dA), Math.cos(dA));
-    heading += dA * clamp((v > 1 ? 9 : 4) * step, 0, 1);          // turn rate
-    const stride = gaitStride(clips, v);
+    const turn = dA * clamp((v > 1 ? turnRate : 4) * step, 0, 1);
+    heading += turn;
+    const rel = velYaw == null ? 0 : Math.atan2(Math.sin(velYaw - heading), Math.cos(velYaw - heading));
+    const stride = gaitStride(clips, v, rel);
     phase += (Math.max(v, 0.9) * step) / stride;
-    H[i] = heading; PH[i] = phase; V[i] = v;
+    // lean: forward with speed and acceleration, sideways into turns (degrees, low-passed)
+    const vf = v * Math.cos(rel), acc = (vf - pv) / step; pv = vf;
+    const omega = turn / step;
+    pitch += (clamp(1.2 * Math.max(0, vf) + 1.6 * clamp(acc, -4, 4), -7, 13) - pitch) * clamp(6 * step, 0, 1);
+    roll += (clamp(-omega * v * 2.6, -16, 16) - roll) * clamp(8 * step, 0, 1);
+    H[i] = heading; PH[i] = phase; V[i] = v; REL[i] = rel; PITCH[i] = pitch; ROLL[i] = roll;
   }
   const sample = (arr, t) => { const fi = clamp((t - t0) / step, 0, n - 1), i = Math.min(n - 2, Math.floor(fi)); return lerp(arr[i], arr[i + 1], fi - i); };
+  const sampleAngle = (arr, t) => { const fi = clamp((t - t0) / step, 0, n - 1), i = Math.min(n - 2, Math.floor(fi)); let d = arr[i + 1] - arr[i]; d = Math.atan2(Math.sin(d), Math.cos(d)); return arr[i] + d * (fi - i); };
   return {
-    heading: (t) => sample(H, t), speed: (t) => sample(V, t),
+    heading: (t) => sample(H, t), speed: (t) => sample(V, t), lean: (t) => ({ pitch: sample(PITCH, t), roll: sample(ROLL, t) }),
     clips: (t) => {
-      const v = sample(V, t), ph = sample(PH, t), w = gaitWeights(clips, v), list = [];
+      const v = sample(V, t), ph = sample(PH, t), rel = sampleAngle(REL, t), w = gaitWeights(clips, v, rel), list = [];
       if (w.idle > 0 && clips.idle) list.push({ clip: clips.idle.clip, time: ((t + seed * 0.41) % clips.idle.dur + clips.idle.dur) % clips.idle.dur, weight: w.idle });
-      for (const g of order) if (w[g] > 0) list.push({ clip: clips[g].clip, time: (((ph % 1) + 1) % 1) * clips[g].dur, weight: w[g] });
+      for (const g of GAITS) if (w[g] > 1e-3 && clips[g]) list.push({ clip: clips[g].clip, time: (((ph + (g === 'back' || g === 'left' || g === 'right' ? 0 : 0)) % 1 + 1) % 1) * clips[g].dur, weight: w[g] });
       return list;
     },
   };
 }
 
-function gaitWeights(clips, v) {
-  const walk = clips.walk ? smoothstep(0.25, 0.9, v) * (1 - smoothstep(2.0, 3.0, v)) : 0;
-  const run = smoothstep(clips.walk ? 2.0 : 0.4, clips.walk ? 3.0 : 2.2, v);
-  const sprint = clips.sprint ? smoothstep(5.2, 7.0, v) * run : 0;
-  const jog = run - sprint;
-  return { idle: Math.max(0, 1 - walk - run), walk, jog, sprint };
+const GAITS = ['walk', 'jog', 'run', 'sprint', 'back', 'left', 'right'];
+function gaitWeights(clips, v, rel = 0) {
+  // direction lobes in the body frame (forward / back / left / right)
+  let f = Math.max(0, Math.cos(rel)), b = Math.max(0, -Math.cos(rel)), l = Math.max(0, Math.sin(rel)), r = Math.max(0, -Math.sin(rel));
+  if (!clips.back) { f += b; b = 0; }
+  if (!clips.left) { f += l; l = 0; }
+  if (!clips.right) { f += r; r = 0; }
+  const tot = f + b + l + r || 1; f /= tot; b /= tot; l /= tot; r /= tot;
+  const moving = smoothstep(0.25, 0.9, v);
+  const walk = clips.walk ? 1 - smoothstep(2.0, 3.0, v) : 0;
+  const runAll = 1 - walk;
+  const sprint = clips.sprint ? smoothstep(5.4, 7.0, v) * runAll : 0;
+  const run = clips.run ? smoothstep(3.6, 4.8, v) * (runAll - sprint) : 0;
+  const jog = runAll - sprint - run;
+  // backpedal / side-step only at walking-to-jogging speeds
+  const dirOK = 1 - smoothstep(3.5, 4.5, v);
+  const back = b * dirOK, left = l * dirOK, right = r * dirOK, fwd = 1 - back - left - right;
+  return { idle: 1 - moving, walk: moving * fwd * walk, jog: moving * fwd * jog, run: moving * fwd * run, sprint: moving * fwd * sprint, back: moving * back, left: moving * left, right: moving * right };
 }
 
-function gaitStride(clips, v) {
-  const w = gaitWeights(clips, v), s = (g) => clips[g]?.stride ?? 1;
-  const tot = w.walk + w.jog + w.sprint;
-  return tot < 1e-3 ? s(clips.walk ? 'walk' : 'jog') : (w.walk * s('walk') + w.jog * s('jog') + w.sprint * s('sprint')) / tot;
+function gaitStride(clips, v, rel = 0) {
+  const w = gaitWeights(clips, v, rel), s = (g) => clips[g]?.stride ?? 1;
+  let tot = 0, acc = 0;
+  for (const g of GAITS) if (w[g] > 0 && clips[g]) { tot += w[g]; acc += w[g] * s(g); }
+  return tot < 1e-3 ? s(clips.walk ? 'walk' : 'jog') : acc / tot;
+}
+
+// ------------------------------------------------------------------ layering clips
+
+/** A one-shot clip overlay: starts at `start` (seconds), fades in/out. Returns { w, list } or null. */
+export function oneShot(t, { clip, start, duration, rate = 1, offset = 0, fadeIn = 0.2, fadeOut = 0.3, peak = 1, hold = false }) {
+  const end = start + (duration - offset) / rate;
+  if (t < start - fadeIn || (!hold && t > end)) return null;
+  const w = peak * smoothstep(start - fadeIn, start, t) * (hold ? 1 : 1 - smoothstep(end - fadeOut, end, t));
+  return w > 1e-3 ? { w, list: [{ clip, time: clamp(offset + (t - start) * rate, 0, duration), weight: 1 }] } : null;
+}
+
+/** Blend overlays (in order, later on top) over a base clip list; weights stay normalised. */
+export function layer(base, ...overlays) {
+  let list = base;
+  for (const ov of overlays) {
+    if (!ov || !(ov.w > 0)) continue;
+    list = [...list.map((x) => ({ ...x, weight: x.weight * (1 - ov.w) })), ...ov.list.map((x) => ({ ...x, weight: x.weight * ov.w }))];
+  }
+  return list.filter((x) => x.weight > 1e-3);
+}
+
+/**
+ * Real kick motion for touches: each pass/shot/clearance plays a captured kick (by foot) aligned so
+ * the capture's contact frame lands on the touch. `clips` = { R: [{clip, contact, duration}], L: [...] }.
+ * Softer passes blend less of the full kick in.
+ */
+export function kickOverlay(t, touches, clips, { kinds = ['pass', 'shot', 'clearance', 'cross', 'touch'], minPower = 0, seed = 0 } = {}) {
+  let best = null;
+  touches.forEach((tc, i) => {
+    if (!kinds.includes(tc.kind) || (tc.power ?? 1) < minPower) return;
+    const set = clips[tc.foot || 'R'];
+    if (!set?.length) return;
+    const k = set[(i * 7 + seed) % set.length];
+    const pw = tc.kind === 'shot' ? 1 : 0.6 + 0.4 * clamp(tc.power ?? 0.6, 0, 1);
+    const ov = oneShot(t, { clip: k.clip, start: tc.t - Math.min(0.55, k.contact), offset: k.contact - Math.min(0.55, k.contact), duration: Math.min(k.duration, k.contact + 0.75), fadeIn: 0.22, fadeOut: 0.35, peak: pw });
+    if (ov && (!best || ov.w > best.w)) best = ov;
+  });
+  return best;
+}
+
+/**
+ * Head, neck and upper spine turn toward a target (additive pose, universal bone names).
+ * `heading` = film yaw (radians); `pos` = [x, y] data metres; `target` = [x, y, z] data metres.
+ */
+export function lookPose({ heading, pos, target, eye = 1.65, weight = 1, maxYaw = 80 }) {
+  if (!target || weight <= 0) return {};
+  const dx = target[0] - pos[0], dy = target[1] - pos[1], d = Math.max(0.3, hyp(dx, dy));
+  let yaw = Math.atan2(dx, dy) - heading;
+  yaw = Math.atan2(Math.sin(yaw), Math.cos(yaw)) * 180 / Math.PI;
+  // beyond reach (ball behind) the head comes back toward forward instead of snapping across
+  const reach = Math.abs(yaw) > maxYaw + 40 ? 0 : clamp(yaw, -maxYaw, maxYaw);
+  const pitch = clamp(-Math.atan2((target[2] ?? 0) - eye, d) * 180 / Math.PI, -25, 40) * weight;   // + = look down
+  const y = reach * weight;
+  return { spine_02: [0, y * 0.1, 0], spine_03: [pitch * 0.1, y * 0.15, 0], neck_01: [pitch * 0.35, y * 0.3, 0], Head: [pitch * 0.55, y * 0.45, 0] };
+}
+
+/** Hands on head (a near miss, a goal conceded): additive pose with fades. */
+export function handsOnHeadPose(t, t0, t1) {
+  const w = smoothstep(t0, t0 + 0.4, t) * (1 - smoothstep(t1 - 0.5, t1, t));
+  if (w <= 0) return {};
+  // upper arms up and out to ~40 degrees above horizontal, slightly forward; forearms fold in over the head
+  return { upperarm_l: [-18 * w, 0, 128 * w], upperarm_r: [-18 * w, 0, -128 * w], lowerarm_l: [-10 * w, 0, 112 * w], lowerarm_r: [-10 * w, 0, -112 * w], neck_01: [14 * w, 0, 0], Head: [8 * w, 0, 0] };
+}
+
+/** Hands on hips (waiting, tired): additive pose with fades. */
+export function handsOnHipsPose(t, t0, t1) {
+  const w = smoothstep(t0, t0 + 0.5, t) * (1 - smoothstep(t1 - 0.5, t1, t));
+  if (w <= 0) return {};
+  return { upperarm_l: [12 * w, 0, 40 * w], upperarm_r: [12 * w, 0, -40 * w], lowerarm_l: [0, 70 * w, 0], lowerarm_r: [0, -70 * w, 0] };
 }
 
 // ------------------------------------------------------------------ touches as poses
@@ -405,12 +505,13 @@ export function footFor(touch, headingAt) {
  * touches ({ t, kind, power, foot }). Bone names default to the Rigify / Quaternius mannequin
  * (DEF-thigh.R ...); pass `bones` to map another rig.
  */
-export function touchPose(t, touches, { bones = {} } = {}) {
-  const B = { thighR: 'DEF-thigh.R', shinR: 'DEF-shin.R', footR: 'DEF-foot.R', thighL: 'DEF-thigh.L', shinL: 'DEF-shin.L', footL: 'DEF-foot.L', spine: 'DEF-spine.001', armL: 'DEF-upper_arm.L', armR: 'DEF-upper_arm.R', ...bones };
+export function touchPose(t, touches, { bones = {}, kinds = null } = {}) {
+  // universal bone names; the renderer maps them onto Rigify / Mixamo rigs too
+  const B = { thighR: 'thigh_r', shinR: 'calf_r', footR: 'foot_r', thighL: 'thigh_l', shinL: 'calf_l', footL: 'foot_l', spine: 'spine_01', armL: 'upperarm_l', armR: 'upperarm_r', ...bones };
   const out = {};
   const add = (bone, x, y = 0, z = 0) => { const o = out[bone] || (out[bone] = [0, 0, 0]); o[0] += x; o[1] += y; o[2] += z; };
   for (const tc of touches) {
-    if (tc.header) continue;
+    if (tc.header || (kinds && !kinds.includes(tc.kind))) continue;
     const kind = tc.kind === 'receive' ? 'receive' : tc.kind === 'dribble' ? 'dribble' : 'kick';
     const m = MOVES[kind], tau = t - tc.t;
     if (tau < m.span[0] || tau > m.span[1]) continue;

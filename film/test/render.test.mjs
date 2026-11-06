@@ -18,8 +18,9 @@ function png(w, h, rgb) {  // minimal solid-colour PNG encoder
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 
-test('plate compositing: holdouts reveal the plate, actors draw on top, only new shadows darken', { skip: !findChrome() && 'Chrome not installed', timeout: 120000 }, async () => {
+test('plate compositing: holdouts reveal the plate, actors draw on top, only new shadows darken', { skip: !findChrome() && 'Chrome not installed', timeout: 120000 }, async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hfilm-render-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   for (let f = 0; f < 3; f++) fs.writeFileSync(path.join(dir, `plate.${f}.png`), png(32, 18, [120, 160, 90]));
   // camera looks straight down (screen right = +X, ~15.6 px per metre at the ground); a red 2 m box at x=-3,
   // a holdout over x=3.5..6.5, sun from +X so the box's shadow falls on x=-5.2..-4
@@ -34,7 +35,7 @@ test('plate compositing: holdouts reveal the plate, actors draw on top, only new
     actors: [{ id: 'box', model: { primitive: 'box', size: [2, 2, 2], material: { color: '#ff0000', roughness: 1 } }, transform: { position: [-3, 1, 0] } }],
   };`);
   const probe = { frames: [1], points: [[113, 90], [238, 90], [160, 165], [86, 90]], results: {} };
-  const res = await render(path.join(dir, 'film.mjs'), { out: path.join(dir, 'out.mp4'), probe });
+  const res = await render(path.join(dir, 'film.mjs'), { out: path.join(dir, 'out.mp4'), probe, memoryGB: 2, timeoutMin: 1 });
   assert.ok(res.ok && fs.statSync(path.join(dir, 'out.mp4')).size > 1000, 'mp4 written');
   const [box, holdout, plain, shadow] = probe.results[1];
   assert.ok(box[0] > 120 && box[1] < 80, `box should be red, got ${box}`);

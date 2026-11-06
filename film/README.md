@@ -113,8 +113,11 @@ The module is passed to film modules as `sports`, and is also importable as `hyb
 | `loadSkillCorner({ dir, id, from, to })` | a window of a [SkillCorner open data](https://github.com/SkillCorner/opendata) match (10 fps tracking + possession events) in a provider-neutral shape |
 | `playerTracks(match)` | smoothed, continuous paths per player (`at(t)`, `vel(t)`), with gaps bridged |
 | `physicalBall(match, tracks)` | a ball that only moves when someone touches it (see below); returns `at(t)`, `touches`, `goals` |
-| `locomotion(track, { clips, look, aim })` | idle / walk / jog / sprint blended from real speed, stride-matched; facing follows motion or the ball |
-| `touchPose(t, touches)`, `footFor`, `armsUpPose`, `addPoses` | procedural kicks, first touches, dribble touches and celebrations as additive bone poses |
+| `locomotion(track, { clips, look, aim, faceBall })` | idle / walk / jog / run / sprint blended from real speed, stride-matched; below `faceBall` m/s players keep watching the ball and **backpedal or side-step** (`back`, `left`, `right` clips); `lean(t)` gives body lean from acceleration and turning |
+| `kickOverlay(t, touches, clips)` | **real captured kicks** (by foot) aligned so the capture's contact frame lands on each pass, shot or clearance |
+| `oneShot(t, {...})`, `layer(base, ...overlays)` | one-shot clips (celebrations, gestures, reactions) with fades, blended over locomotion |
+| `lookPose({ heading, pos, target })` | head, neck and upper spine track the ball (additive pose) |
+| `touchPose(t, touches, { kinds })`, `footFor`, `handsOnHeadPose`, `handsOnHipsPose`, `armsUpPose`, `addPoses` | procedural first touches, dribble touches and reactions as additive bone poses (universal bone names, any rig) |
 | `extendTracks(tracks, { from, to, plan })` | continue paths past the end of the data with physical steering (e.g. walk back for the restart) |
 
 How the ball is rebuilt:
@@ -126,6 +129,64 @@ How the ball is rebuilt:
 
 Measured against the tracked ball, the rebuilt ball's median error was 1.4–1.8 m across two real goals.
 `Film/realmatch/film.mjs` in the AgentSandbox project is a full 70 s example built this way.
+
+## Athletes, kits and real motion (`athletes`, `library/`)
+
+The framework ships a production library in `film/library/`, committed to the repo so every machine
+and every agent gets the same cast and motion (sources, licences and rebuild scripts are next to the
+files; see `library/README.md`).
+
+- **Athletes** (`library/athletes`, CC0 Quaternius Universal Base Characters): male and female
+  athletic bodies with faces, six hairstyles and a beard, light and dark skin textures that blend to
+  any tone. About 1 MB each.
+- **Kits are generated, not painted**: shirt, shorts, socks, boots (and gloves) are real garment
+  shells cut from the body, skinned to the same skeleton, draped (smoothed over muscle detail) and
+  hidden-body underneath so limbs never poke through. Patterns (`plain`, `stripes`, `hoops`,
+  `halves`, `sash`, `pinstripes`, `gradient`, `chevron`), collar (`crew`, `v`, `polo`), long or short
+  sleeves, trims, a crest, a sponsor wordmark and the **name and number** on the back (plus the
+  number on the shorts) are drawn per player.
+- **Motion** (`library/motion`, rig-neutral `hfilm-motion@1`): Quaternius UAL 1+2 (CC0) locomotion
+  and gestures, plus motion capture from the CMU Graphics Lab database: six real soccer kicks (and
+  their left-foot mirrors) with contact times, run cycles, sprint, backpedal, side-steps, a dejected
+  walk, celebrations (airplane, leap, tuck jump, jumping, arms up), high fives, pointing, waving,
+  applause and a shrug. Clips store world-space bone deltas, so any humanoid plays them correctly:
+  universal (Unreal/Quaternius) names directly, Rigify `DEF-` and Mixamo names through built-in maps.
+
+```js
+export default ({ athletes: A, sports: S }) => {
+  const reds = A.squad({ kit: A.KITS.redsHome, keeperKit: A.KITS.keeperGold, seed: 11,
+    players: [{ id: 7, number: 7, name: 'Hale' }, { id: 1, number: 1, name: 'Marsh', gk: true }] });
+  const gaits = A.gaits(reds[0].scale);           // Run_Jog, Run_Sprint, Walk_Backward, ... with strides in metres
+  const kicks = { R: A.kicks('R'), L: A.kicks('L') };
+  return { /* ... */ actors: reds.map((p) => ({ id: p.name, model: p.model, transform: (f) => ({ position: [0, 0, 0], scale: p.scale }),
+    animation: (f) => S.layer(loco.clips(f / 30), S.kickOverlay(f / 30, touches, kicks)) })) };
+};
+```
+
+An actor `model` object can carry: `url` (glTF), `attach` (hair or gear glTFs rebound to the
+skeleton by bone name, each with an optional `color`), `motion` (`.motion.json` files), `skin`
+(`{ tone 0..1, tint, light, dark }`), `kit` (see `web/athlete.js` `KIT_DEFAULTS`), `hairColor` and
+`boneMap` (universal name -> your rig's bone name, for unusual rigs). Paths starting with `library:`
+resolve to `film/library`. To make more motion from captures: `src/mocap.mjs` reads Acclaim ASF/AMC,
+`src/rig.mjs` trims, mirrors, loops and encodes; `library/motion/build.mjs` is the worked example.
+
+## Stadiums (`hfilm ue stadium`)
+
+```bash
+hfilm ue stadium --project MyGame.uproject --map /Game/HFilm/Stadiums/Oculus [--preset oculus|classic] \
+  [--config overrides.json] [--home REDS --away WHITES]
+```
+
+Generates a complete, lit stadium level headlessly in under a minute (`ue/stadium.py`, no content
+packs): a pitch with full markings, goals with nets, LED boards and dugouts, a continuous three-tier
+bowl with curved corners, ~23k seated supporter figures in the lower tier (varied clothing, scarves, 12%
+cheering, swaying and jumping) and painted crowds above,
+LED ribbons and a glazed suite band, a roof, an angular facade with a glass "window" end, a plaza and
+a city. `oculus` is an enclosed bowl with an open pinwheel oculus (eight translucent petals) and a
+360-degree halo video board; `classic` is open with a cantilever ring roof. Every dimension, colour,
+tier, the sun and the light levels are config (`PRESETS` in `ue/stadium.py`). It prints the
+`--holdouts / --grid / --ground` arguments to use for plates. Custom meshes listed as holdouts are
+exported as real triangles, so the roof shadows and hides actors exactly.
 
 ## Hybrid with Unreal Engine
 
@@ -140,7 +201,8 @@ hfilm ue plates film.mjs --project MyGame.uproject --map /Game/Maps/Stadium \
 Two headless Unreal runs, and your map is never modified:
 
 1. **Prepare** (commandlet):
-   - exports holdouts (Unreal basic shapes become exact proxies, other meshes oriented bounding boxes),
+   - exports holdouts (Unreal basic shapes become exact proxies, other meshes their real triangles
+     up to a 400k-triangle budget, translucent sections skipped; instanced custom meshes bounding boxes),
      the sun (direction, colour, temperature), the ground height, the transforms of the hidden actors
      (`hidden.json`, so the film can re-create them in place) and actor counts per folder;
    - saves a separate plates map without the hidden actors;
@@ -170,8 +232,10 @@ any numbered image sequence and make the film's camera match it.
 
 Every command takes `--json` and prints one JSON object (`{ ok, … }` or `{ ok: false, error }`).
 Errors name the field and what was expected. Through the UE agent harness the same features are the
-MCP tool `ue_film` (`doctor`, `inspect`, `bake`, `render`, `plates`), with the project filled in from
-the session.
+MCP tool `ue_film` (`doctor`, `inspect`, `library`, `bake`, `render`, `plates`, `stadium`), with the
+project filled in from the session. `hfilm library` (or `ue_film library`) lists the shared athletes,
+kits, motion clips and stadium presets, so an agent on any machine can see what it can use without
+reading this file.
 
 `hfilm inspect model.glb` lists every clip with its duration and natural ground speed, measured
 from planted-foot motion. Drive the clip rate as `speed / groundSpeed` and feet stop sliding.
@@ -180,10 +244,11 @@ from planted-foot motion. Drive the clip rate as `speed / groundSpeed` and feet 
 
 - Lighting is matched, not simulated. The sun comes from Unreal; set the fill (`ambient` or an HDRI) and
   `exposure` by eye, using `preview` with film quality on. Plate GI does not bounce onto actors.
-- Holdouts are basic shapes or oriented boxes. Arbitrary meshes occlude as their bounding box (fine for
-  posts, boards and walls; coarse for organic shapes).
-- Characters are whatever glTF you bring. The soccer example uses the CC0 Quaternius mannequin
-  (`node examples/soccer-goal/fetch-assets.mjs`).
+- Holdouts are basic shapes or real triangles; instanced custom meshes still occlude as boxes.
+- The athletes are stylised game characters (CC0), not scans; faces hold up in mid shots, less so in
+  extreme close-ups. Captured motion covers kicks, runs, celebrations and gestures; tackles, headers
+  and keeper saves are still procedural.
 - Video only: add audio in your editor. The Palmier pipeline next to this repo does commentary and crowd.
 
-MIT. Example assets: see `examples/soccer-goal/assets/LICENSE-assets.txt` (CC0).
+MIT. Library assets: see `library/README.md` (CC0 characters and animation by Quaternius; motion
+capture from mocap.cs.cmu.edu, free to use, not for resale as data).

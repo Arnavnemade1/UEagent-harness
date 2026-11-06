@@ -11,7 +11,10 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+import { boneMap, decodeMotion, rigOf, threeClip } from './motion.js';
+import { attach, dressAthlete, tintHair } from './athlete.js';
 
 const L = { ACTOR: 1, HOLDOUT: 2, CATCHER: 3, LIGHT_FULL: 4, LIGHT_STATIC: 5, AMBIENT: 6 };
 
@@ -129,13 +132,15 @@ export async function createFilm(canvas, spec, { onLog = console.log } = {}) {
 
   // ---- environment & lights
   if (spec.environment?.hdri) {
-    const tex = await new RGBELoader().loadAsync(spec.environment.hdri);
+    const EnvLoader = /\.exr$/i.test(spec.environment.hdri) ? EXRLoader : RGBELoader;
+    const tex = await new EnvLoader().loadAsync(spec.environment.hdri);
     tex.mapping = THREE.EquirectangularReflectionMapping;
     const pmrem = new THREE.PMREMGenerator(renderer);
     scene.environment = pmrem.fromEquirectangular(tex).texture;
     scene.environmentIntensity = spec.environment.intensity ?? 1;
     scene.environmentRotation.y = THREE.MathUtils.degToRad(spec.environment.rotation || 0);
     if (spec.environment.background && !plateMode) { scene.background = tex; scene.backgroundRotation.y = scene.environmentRotation.y; scene.backgroundIntensity = spec.environment.intensity ?? 1; }
+    else tex.dispose();
     pmrem.dispose();
   }
   const amb = spec.ambient || {};
@@ -170,12 +175,12 @@ export async function createFilm(canvas, spec, { onLog = console.log } = {}) {
   };
   // grid holdouts (e.g. goal nets): occlude only along world-space grid lines, like the plate's net material
   const gridMats = new Map();
-  const gridMat = (g) => {
-    const key = `${g.cell}:${g.line}`;
+  const gridMat = (g, instanced = true) => {
+    const key = `${g.cell}:${g.line}:${instanced}`;
     if (!gridMats.has(key)) gridMats.set(key, new THREE.ShaderMaterial({
       colorWrite: false, side: THREE.DoubleSide, uniforms: { cell: { value: g.cell }, line: { value: g.line } },
       vertexShader: `varying vec3 vW; varying vec3 vN;
-        void main(){ mat4 m = modelMatrix * instanceMatrix; vec4 w = m * vec4(position, 1.0); vW = w.xyz; vN = normalize(mat3(m) * normal);
+        void main(){ mat4 m = modelMatrix${instanced ? ' * instanceMatrix' : ''}; vec4 w = m * vec4(position, 1.0); vW = w.xyz; vN = normalize(mat3(m) * normal);
           gl_Position = projectionMatrix * viewMatrix * w; }`,
       fragmentShader: `uniform float cell; uniform float line; varying vec3 vW; varying vec3 vN;
         void main(){ vec3 n = abs(normalize(vN)); vec2 uv = n.x > 0.5 ? vW.yz : (n.y > 0.5 ? vW.xz : vW.xy);
@@ -188,6 +193,20 @@ export async function createFilm(canvas, spec, { onLog = console.log } = {}) {
   let holdoutCount = 0;
   for (const list of Object.values(groups)) {
     const { shape, grid } = list[0];
+    if (shape === 'mesh') {   // real triangles (custom plate geometry: roofs, bowls), world space
+      for (const h of list) {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(h.positions, 3));
+        geo.setIndex(h.indices);
+        geo.computeBoundingSphere();
+        if (grid) geo.computeVertexNormals();
+        const mesh = new THREE.Mesh(geo, grid ? gridMat(grid, false) : holdoutMat);
+        mesh.castShadow = !grid; mesh.frustumCulled = false; mesh.renderOrder = -10; mesh.layers.set(L.HOLDOUT);
+        scene.add(mesh);
+        holdoutCount++;
+      }
+      continue;
+    }
     const geo = shapeGeo[shape];
     if (!geo) { onLog('warn', `unknown holdout shape ${shape}`); continue; }
     const im = new THREE.InstancedMesh(geo, grid ? gridMat(grid) : holdoutMat, list.length);
@@ -215,19 +234,37 @@ export async function createFilm(canvas, spec, { onLog = console.log } = {}) {
   }
 
   // ---- actors
-  const gltfCache = new Map();
+  const gltfCache = new Map(), texCache = new Map(), motionCache = new Map(), clipCache = new Map();
   const loader = new GLTFLoader();
   const texLoader = new THREE.TextureLoader();
+  const loadGltf = (url) => { if (!gltfCache.has(url)) gltfCache.set(url, loader.loadAsync(url)); return gltfCache.get(url); };
+  const loadTex = (url) => {
+    if (!texCache.has(url)) texCache.set(url, texLoader.loadAsync(url).then((t) => { t.colorSpace = THREE.SRGBColorSpace; t.flipY = false; t.anisotropy = 8; return t; }));
+    return texCache.get(url);
+  };
+  const loadMotion = (url) => { if (!motionCache.has(url)) motionCache.set(url, fetch(url).then((r) => r.json()).then(decodeMotion)); return motionCache.get(url); };
   const actors = [];
   for (const a of spec.actors || []) {
     let root, mixer = null, actions = {};
     if (a.model?.url) {
-      if (!gltfCache.has(a.model.url)) gltfCache.set(a.model.url, loader.loadAsync(a.model.url));
-      const gltf = await gltfCache.get(a.model.url);
+      const m = a.model, gltf = await loadGltf(m.url);
       root = SkeletonUtils.clone(gltf.scene);
-      if (gltf.animations?.length) {
+      // rig-neutral motion clips, baked once per model (all clones share the rest pose)
+      const extra = [];
+      for (const url of m.motion || []) {
+        const key = `${m.url}|${url}`;
+        if (!clipCache.has(key)) clipCache.set(key, loadMotion(url).then((clips) => { const rig = rigOf(SkeletonUtils.clone(gltf.scene), m.boneMap); return clips.map((c) => threeClip(c, rig)); }));
+        extra.push(...await clipCache.get(key));
+      }
+      for (const att of m.attach || []) attach(root, (await loadGltf(att.url)).scene, att);
+      if (m.kit || m.skin) {
+        const tex = m.skin?.light && m.skin?.dark ? { light: await loadTex(m.skin.light), dark: await loadTex(m.skin.dark) } : {};
+        dressAthlete(root, m, tex);
+      }
+      if (m.hairColor) tintHair(root, m.hairColor);
+      if (gltf.animations?.length || extra.length) {
         mixer = new THREE.AnimationMixer(root);
-        for (const clip of gltf.animations) actions[clip.name] = mixer.clipAction(clip);
+        for (const clip of [...gltf.animations, ...extra]) actions[clip.name] = mixer.clipAction(clip);
       }
       if (a.tint) {
         root.traverse((o) => {
@@ -251,7 +288,16 @@ export async function createFilm(canvas, spec, { onLog = console.log } = {}) {
         clearcoat: mp.clearcoat ?? 0, clearcoatRoughness: mp.clearcoatRoughness ?? 0.2,
         emissive: mp.emissive || '#000000', emissiveIntensity: mp.emissiveIntensity ?? 1,
       });
-      if (mp.map) { mat.map = await texLoader.loadAsync(mp.map); mat.map.colorSpace = THREE.SRGBColorSpace; mat.map.anisotropy = 8; }
+      for (const field of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap', 'alphaMap']) {
+        if (!mp[field]) continue;
+        const texture = await texLoader.loadAsync(mp[field]);
+        texture.colorSpace = ['map', 'emissiveMap'].includes(field) ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+        texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+        mat[field] = texture;
+      }
+      if (mp.normalScale) mat.normalScale.fromArray(mp.normalScale);
+      if (mp.aoMap) mat.aoMapIntensity = mp.aoMapIntensity ?? 1;
+      if (mp.alphaMap) { mat.alphaTest = mp.alphaTest ?? 0.5; mat.transparent = mp.transparent ?? false; }
       root = new THREE.Mesh(geo, mat);
     }
     root.traverse((o) => {
@@ -263,6 +309,8 @@ export async function createFilm(canvas, spec, { onLog = console.log } = {}) {
     // bones by name, parents before children, for additive poses
     const bones = {}, depth = (o) => { let d = 0; while (o.parent) { d++; o = o.parent; } return d; };
     root.traverse((o) => { if (o.isBone) bones[o.name] = o; });
+    // universal names (thigh_r, Head, ...) also address the bones of Rigify / Mixamo rigs
+    for (const [u, name] of Object.entries(boneMap(Object.keys(bones), a.model?.boneMap))) bones[u] ??= bones[name];
     const poseOrder = Object.keys(bones).sort((x, y) => depth(bones[x]) - depth(bones[y]));
     actors.push({ spec: a, root, mixer, actions, bones, poseOrder, restore: [] });
   }

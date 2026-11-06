@@ -53,8 +53,8 @@ test('locomotion blends gaits from speed and touchPose swings the kicking leg', 
   const names = loco.clips(5).map((c) => c.clip);
   assert.ok(names.includes('Idle'), 'slow drift (0.2 m/s) is mostly idle');
   const pose = S.touchPose(2.0, [{ t: 2.0, kind: 'pass', power: 0.8, foot: 'R' }]);
-  assert.ok(pose['DEF-thigh.R'][0] < -5, 'right thigh swings forward at contact');
-  assert.ok(pose['DEF-shin.R'][0] > 5, 'knee still bent at contact');
+  assert.ok(pose.thigh_r[0] < -5, 'right thigh swings forward at contact');
+  assert.ok(pose.calf_r[0] > 5, 'knee still bent at contact');
   assert.deepEqual(S.touchPose(5, [{ t: 2.0, kind: 'pass', foot: 'R' }]), {}, 'no pose away from touches');
 });
 
@@ -66,5 +66,5 @@ test('films can use sports helpers and bake additive poses', async () => {
   });`);
   const { baked } = bakeFilm(await loadFilm(path.join(dir, 'film.mjs')));
   assert.equal(baked.actors[0].pose.length, 3);
-  assert.ok(baked.actors[0].pose[1]['DEF-thighR'], 'pose baked at the touch frame, under the three.js bone name');
+  assert.ok(baked.actors[0].pose[1].thigh_r, 'pose baked at the touch frame, under the universal bone name');
 });
