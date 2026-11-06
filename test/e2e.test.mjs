@@ -57,6 +57,7 @@ describe('MCP protocol', () => {
 
 describe('editor tools', () => {
   it('ue_status returns live editor context', async () => {
+    await codex.tool('ue_find_actors', { limit: 1 }); // codex connects in the background; make sure it has
     const r = await claude.tool('ue_status');
     assert.equal(r.isError, undefined);
     assert.equal(r.json.editor, 'connected');
@@ -215,6 +216,18 @@ describe('editor tools', () => {
     assert.equal(r.isError, undefined, r.text.join('\n'));
     assert.equal(r.json.state, 'stopped');
     assert.ok(r.json.log_during_play.lines.some((l) => /Accessed None/.test(l)));
+    assert.ok(!r.json.log_during_play.lines.some((l) => /currently in a play mode/.test(l)), 'bridge must not spam PIE errors');
+  });
+
+  it('reads the game world during play and refuses level edits until it stops', async () => {
+    await claude.tool('ue_play', { action: 'start' });
+    const found = await claude.tool('ue_find_actors', { name: 'Cube' });
+    assert.equal(found.json.total, 1, found.text.join('\n'));
+    const edit = await claude.tool('ue_edit_actors', { ops: [{ op: 'spawn', mesh: 'cube' }] });
+    assert.match(edit.text[0], /pie_active/);
+    const st = await claude.tool('ue_status');
+    assert.match(JSON.stringify(st.json.selection), /unavailable during play/);
+    await claude.tool('ue_play', { action: 'stop' });
   });
 
   it('reads filtered logs incrementally', async () => {

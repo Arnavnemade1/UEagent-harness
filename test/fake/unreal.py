@@ -1114,11 +1114,28 @@ class BlueprintEditorLibrary(object):
 
 # ------------------------------------------------------------------ subsystems
 
+def _pie_guard():
+    if _S["pie"]:  # mirrors EditorScriptingHelpers::CheckIfInEditorAndPIE
+        _write_log("LogUtils", "Error", "The Editor is currently in a play mode.")
+        return True
+    return False
+
+
+class GameplayStatics(object):
+    @staticmethod
+    def get_all_actors_of_class(world, cls):
+        return [a for a in _S["world"].actors if isinstance(a, cls)] if world is not None else []
+
+
 class EditorActorSubsystem(object):
     def get_all_level_actors(self):
+        if _pie_guard():
+            return []
         return list(_S["world"].actors)
 
     def get_selected_level_actors(self):
+        if _pie_guard():
+            return []
         return [a for a in _S["selected"] if a in _S["world"].actors]
 
     def set_selected_level_actors(self, acts):

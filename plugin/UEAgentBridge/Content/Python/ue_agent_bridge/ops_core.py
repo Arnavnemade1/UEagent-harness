@@ -25,8 +25,11 @@ def status(ctx, a):
         "agents": [c.name for c in srv.clients.values() if c.authed],
     }
     try:
-        sel = compat.selected_actors()
-        out["selection"] = {"count": len(sel), "actors": [scene.row(x) for x in sel[:20]]}
+        if compat.is_pie():
+            out["selection"] = {"note": "editor selection is unavailable during play-in-editor"}
+        else:
+            sel = compat.selected_actors()
+            out["selection"] = {"count": len(sel), "actors": [scene.row(x) for x in sel[:20]]}
     except Exception as exc:
         out["selection"] = {"error": str(exc)}
     try:

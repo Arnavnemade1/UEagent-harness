@@ -266,6 +266,7 @@ def edit_actors(ctx, a):
     ops = a.require("ops")
     if not isinstance(ops, list) or not ops:
         raise BridgeError("bad_args", "ops must be a non-empty list")
+    compat.require_no_pie("editing level actors")
     atomic = bool(a.get("atomic", True))
     sc = scene.Scene()
     results = []

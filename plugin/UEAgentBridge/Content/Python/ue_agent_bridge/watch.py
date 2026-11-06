@@ -72,6 +72,8 @@ class Watcher(object):
         if self.pie is not None and pie != self.pie:
             emit("pie", {"state": "running" if pie else "stopped"})
         self.pie = pie
+        if pie:
+            return  # selection APIs log errors during play; resume when it stops
         key, acts = self._selection()
         if self.sel is not None and key != self.sel:
             emit("selection", {"count": len(acts), "actors": ["%s (%s)" % (_label(a), a.get_class().get_name()) for a in acts[:15]]})

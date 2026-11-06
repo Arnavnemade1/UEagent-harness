@@ -69,11 +69,26 @@ def level_path():
 
 
 def all_actors():
+    """Editor-world actors; during play-in-editor, the running game world's actors."""
+    if is_pie():
+        gw = game_world()
+        if gw is None:
+            return []
+        return list(unreal.GameplayStatics.get_all_actors_of_class(gw, unreal.Actor))
     return list(actor_subsystem().get_all_level_actors())
 
 
 def selected_actors():
+    # EditorActorSubsystem logs an error on every call while PIE runs; selection is
+    # meaningless then anyway
+    if is_pie():
+        return []
     return list(actor_subsystem().get_selected_level_actors())
+
+
+def require_no_pie(what="editing the level"):
+    if is_pie():
+        raise BridgeError("pie_active", "%s is not possible during play-in-editor; stop it first (ue_play action: stop)" % what)
 
 
 def console(cmd, world=None):
