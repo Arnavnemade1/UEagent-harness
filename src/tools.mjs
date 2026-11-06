@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import { INTENT_GUIDANCE } from './intent.mjs';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { BridgeClient, BridgeError, NOT_RUNNING_HINT } from './bridge.mjs';
 import { build, findEngine, launchEditor, lastBuild, newestSourceChange } from './build.mjs';
 import { findProject, projectInfo } from './discovery.mjs';
@@ -311,6 +313,31 @@ const TOOLS = [
     annotations: destructive,
   },
   {
+    name: 'ue_film',
+    title: 'Hybrid Film (UE plates + three.js)',
+    description: 'Film-quality video without a heavy Unreal render: Unreal renders the static world once ("plates": empty set from the film\'s cameras, plus holdouts, sun and the transforms of hidden actors), and three.js renders the moving actors in headless Chrome with motion blur, depth of field and soft shadows, composited over the plates. A film is a JS module (film.mjs) describing cameras/actors/motion. Commands: doctor; inspect {model} (clip ground speeds); bake/render {film}; plates {film, map, hide, holdouts, grid, ground}. plates runs a separate headless Unreal (writes /Game/HFilm assets, never modifies the source map) and takes minutes; render is seconds to minutes. See film/README.md.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', enum: ['doctor', 'inspect', 'bake', 'render', 'plates'] },
+        film: str('Path to film.mjs / film.json (bake, render, plates).'),
+        model: str('Path to a .glb (inspect).'),
+        map: str('plates: Unreal map path, e.g. /Game/Maps/Level.'),
+        hide: str('plates: comma list of outliner folders / actor labels / tag:Name to remove from the plates (the film re-creates them).'),
+        holdouts: str('plates: comma list of folders/labels whose geometry the new actors can pass behind (also casts shadows on them).'),
+        grid: str('plates: material name whose meshes are see-through grids (e.g. a net material).'),
+        ground: str('plates: actor label whose top is the ground plane for the shadow catcher.'),
+        name: str('plates: shot name (default: film file name).'),
+        preset: str('plates: optional Movie Render Queue config asset to start from.'),
+        frames: str('render/bake: start:end (end exclusive).'),
+        samples: num('render: sub-frame samples per frame (default from the film, usually 16-32).'),
+        out: str('render: output .mp4 path.'),
+      },
+      required: ['command'],
+    },
+    annotations: rw,
+  },
+  {
     name: 'ue_launch',
     title: 'Launch editor',
     description: 'Start Unreal Editor for this project if it is not running and wait until the bridge is connected.',
@@ -559,6 +586,31 @@ const HANDLERS = {
     });
     if (!res.ok) return { isError: true, content: [{ type: 'text', text: truncate(JSON.stringify(res), MAX_TEXT) }] };
     return ok(s, res);
+  },
+
+  async ue_film(s, a) {
+    const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'film', 'bin', 'hfilm.mjs');
+    if (!fs.existsSync(cli)) throw new BridgeError('film_missing', 'Hybrid Film is not installed next to the harness: expected film/bin/hfilm.mjs (run npm install in film/).');
+    const need = (k) => { if (!a[k]) throw new BridgeError('bad_args', `ue_film ${a.command}: "${k}" is required`); return a[k]; };
+    let args;
+    switch (a.command) {
+      case 'doctor': args = ['doctor']; break;
+      case 'inspect': args = ['inspect', need('model')]; break;
+      case 'bake': args = ['bake', need('film')]; break;
+      case 'render': args = ['render', need('film')]; break;
+      case 'plates': args = ['ue', 'plates', need('film'), '--project', needProject(s), '--map', need('map')]; break;
+      default: throw new BridgeError('bad_args', `unknown ue_film command ${a.command}`);
+    }
+    for (const k of ['hide', 'holdouts', 'grid', 'ground', 'name', 'preset', 'frames', 'samples']) if (a[k] != null && a.command !== 'doctor') args.push(`--${k}`, String(a[k]));
+    if (a.out) args.push('-o', a.out);
+    args.push('--json');
+    const timeout = a.command === 'plates' ? 3 * 3600e3 : a.command === 'render' ? 3600e3 : 300e3;
+    const res = await new Promise((resolve) => execFile(process.execPath, [cli, ...args], { timeout, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => resolve({ err, stdout, stderr })));
+    const line = String(res.stdout).trim().split('\n').filter((l) => l.startsWith('{')).pop();
+    let out;
+    try { out = JSON.parse(line); } catch { out = { ok: false, error: (res.err?.message || 'no output') + `\n${String(res.stderr).slice(-2000)}` }; }
+    if (!out.ok) throw new BridgeError('film_failed', out.error || 'hfilm failed');
+    return ok(s, out, { digest: false });
   },
 
   async ue_launch(s, a, ctx) {

@@ -132,6 +132,23 @@ Background*. Without that, a backgrounded editor ticks only a few times per seco
 calls would stall while you're in the terminal. The setting is restored 45 seconds after the
 last call, and also on the next start if the editor crashed while it was off.
 
+## Hybrid Film: video without a heavy render
+
+[`film/`](film/README.md) is a standalone framework, also exposed to agents as the `ue_film` tool.
+Unreal renders the static world once, as plates from the film's own cameras, plus holdouts, sun and
+hidden-actor transforms. three.js renders the moving actors in headless Chrome in film mode (motion
+blur, depth of field, soft shadows, anti-aliasing), composited over the plates and encoded to MP4.
+
+Measured on an Apple M4 16 GB for a 6 s, 3-shot stadium goal with 22 animated players:
+
+| step | time | memory |
+|---|---|---|
+| plates | ~3 min | |
+| re-render a choreography change | 28 s | ~2 GB |
+| previous full Unreal render, for comparison | ~1 h | 7–14 GB |
+
+It also works with no Unreal at all. See `film/README.md`.
+
 ## Security
 
 - The bridge listens on `127.0.0.1` only. Clients must send a random token stored in
