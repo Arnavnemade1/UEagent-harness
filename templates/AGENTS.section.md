@@ -6,14 +6,20 @@ with other agents.
 
 **Workflow**
 1. Call `ue_status` first. It shows the open level, the user's selection, the camera, unsaved
-   work, new log errors, and whether C++ needs rebuilding. "This" or "the selected thing"
-   means the user's current selection.
+   work, new log errors, and whether C++ needs rebuilding. Resolve "this" from captured
+   request-time selection when provided; otherwise inspect the current selection.
 2. Batch your work. `ue_edit_actors` and `ue_edit_assets` take many ops per call and run as a
    single undo step. Use `ue_python` for anything the structured tools don't cover; it has the
    full `unreal` API and its variables persist between calls.
 3. Verify before you say you're done:
    - Tool results are read back from the engine, so check them.
    - Use `ue_screenshot` to look at visual changes.
+   - For production tasks, preserve the creative brief and derive explicit criteria with
+     reasons. Use `ue_observe` for selective scene evidence and `ue_verify` for deterministic
+     checks. Unknown evidence is incomplete, never a pass; framing does not prove occlusion.
+   - `ue_repair` can apply guarded static location corrections. Capture again and rerun all
+     criteria afterwards. Limit repair attempts to three by default; stop if progress stalls.
+     Sampled motion checks and static repairs do not validate or repair animation keys.
    - Run `ue_logs` with `severity: "error"` and `since: "last"` after changes.
    - Run `ue_play` with `duration_s` to smoke-test gameplay.
    - After editing `.h`, `.cpp` or `.Build.cs` files, run `ue_build` and fix every diagnostic.

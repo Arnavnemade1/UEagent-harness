@@ -63,6 +63,8 @@ Door actor in C++ that swings open on overlap, build it and place one by the Pla
 |---|---|
 | `ue_status` | Open level, your selection, camera, unsaved packages, new log errors, whether C++ needs a build |
 | `ue_find_actors` / `ue_inspect` | Query actors (filter by name, class, tag, folder, proximity); read any property of an actor, component, asset or class default |
+| `ue_observe` / `ue_verify` | Bounded scene snapshots, camera framing, request-derived criteria, and deterministic spatial/temporal reports with explicit unknowns |
+| `ue_repair` | Guarded static placement corrections from verification evidence; refuses stale state, reads back results and rolls back engine failures |
 | `ue_edit_actors` | Batched spawn, set, delete, duplicate, select, attach and detach. One undo step; rolls back if any op fails; results read back from the engine |
 | `ue_find_assets` / `ue_edit_assets` | Asset registry search. Create materials, PBR material graphs, material instances, blueprints, levels, data assets and folders; duplicate, rename, delete (with a reference guard), set, save, reimport |
 | `ue_blueprint` | Create a Blueprint, add components and variables, set defaults, compile |
@@ -100,6 +102,12 @@ than falling back to another editor.
 A timed-out or disconnected edit may have completed in Unreal. The transport never replays
 it automatically; agents are instructed to inspect the result before retrying.
 
+The first autonomous-production increment connects `ue_observe` → `ue_verify` → `ue_repair`
+→ fresh observation and verification. It preserves the creative brief and reports the
+evidence behind each criterion. See [the production roadmap and tool examples](docs/autonomous-production.md)
+for bounds, supported checks, validation status and the remaining ten-second animation gate.
+These tools have fake-engine integration coverage; live Unreal validation is still pending.
+
 ## How it stays in sync and verified
 
 - **One journal.** The bridge keeps a revision counter. Every agent call is journalled and
@@ -131,6 +139,11 @@ While agents are active, the bridge turns off the editor setting *Use Less CPU w
 Background*. Without that, a backgrounded editor ticks only a few times per second, and agent
 calls would stall while you're in the terminal. The setting is restored 45 seconds after the
 last call, and also on the next start if the editor crashed while it was off.
+
+Scene evidence retains at most 32 snapshots within a 1 MiB serialized-data budget per MCP
+session, with explicit partial coverage. Observation does not load assets or render buffers.
+The bridge skips startup in standalone `-game`/`-server` processes and commandlets, so Movie
+Render Queue workers do not register editor-only Slate callbacks.
 
 ## Hybrid Film: video without a heavy render
 
