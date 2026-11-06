@@ -3,6 +3,7 @@
 // transforms. Two headless Unreal runs: a commandlet that prepares assets, then a game-mode
 // Movie Render Queue render under a memory cap.
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -68,12 +69,24 @@ export async function uePlates(file, opts = {}) {
   const name = (opts.name || path.basename(file).replace(/\.(m?js|json)$/, '')).replace(/[^A-Za-z0-9_]/g, '_');
   const outDir = path.resolve(opts.out || path.join(loaded.dir, 'plates', name));
   fs.mkdirSync(outDir, { recursive: true });
-  if (!opts.skipRender) for (const f of fs.readdirSync(outDir)) if (/\.(jpe?g|png|exr)$/i.test(f)) fs.unlinkSync(path.join(outDir, f));
+  // --resume continues an interrupted render, but only for the same cameras, size and frame range
+  const camHash = createHash('sha1').update(JSON.stringify([baked.camera, baked.width, baked.height, baked.start, baked.end, baked.cuts])).digest('hex');
+  const hashFile = path.join(outDir, 'cameras.sha1');
+  const plateFile = (i) => path.join(outDir, `LS_HFilm_${name}.${String(i).padStart(4, '0')}.jpeg`);
+  let renderStart = 0;
+  if (opts.resume && !opts.skipRender) {
+    const prev = fs.existsSync(hashFile) ? fs.readFileSync(hashFile, 'utf8').trim() : null;
+    if (prev !== camHash) throw new FilmError('--resume: the cameras, size or frame range changed since these plates were rendered (or there is no earlier run). Run without --resume.');
+    while (renderStart < baked.end - baked.start && fs.existsSync(plateFile(renderStart))) renderStart++;
+    renderStart = Math.max(0, renderStart - 1);   // the last plate may have been cut off mid-write
+    if (fs.existsSync(plateFile(renderStart))) fs.unlinkSync(plateFile(renderStart));
+    log(`resuming at plate ${renderStart} of ${baked.end - baked.start}`);
+  } else if (!opts.skipRender) for (const f of fs.readdirSync(outDir)) if (/\.(jpe?g|png|exr)$/i.test(f)) fs.unlinkSync(path.join(outDir, f));
   const job = {
     map: opts.map, name, outDir, assetDir: opts.assetDir || '/Game/HFilm',
     hide: list(opts.hide), holdouts: list(opts.holdouts), ground: opts.ground || null, preset: opts.preset || null,
     grid: opts.grid ? { material: opts.grid, cell: +(opts.gridCell || 0.1), line: +(opts.gridLine || 0.064) } : null,
-    temporalSamples: +(opts.temporalSamples || 4),
+    temporalSamples: +(opts.temporalSamples || 4), renderStart,
     fps: baked.fps, width: baked.width, height: baked.height, start: baked.start, end: baked.end, cuts: baked.cuts, camera: baked.camera,
   };
   // clear this provider's previously generated assets (only HFilm-namespaced files for this name) while
@@ -108,7 +121,8 @@ export async function uePlates(file, opts = {}) {
     fs.writeFileSync(path.join(outDir, 'plates.json'), JSON.stringify(s, null, 1));
     return s;
   }
-  log(`2/2 rendering ${n} plates (${baked.width}x${baked.height}) with Movie Render Queue…`);
+  fs.writeFileSync(hashFile, camHash);
+  log(`2/2 rendering ${n - renderStart} plates (${baked.width}x${baked.height}) with Movie Render Queue…`);
   const seqName = prep2.sequence.split('/').pop(), cfgName = prep2.config.split('/').pop();
   let lastPrint = 0;
   const count = () => fs.readdirSync(outDir).filter((f) => /\.jpe?g$/i.test(f)).length;

@@ -314,7 +314,14 @@ export async function createFilm(canvas, spec, { onLog = console.log } = {}) {
           action.enabled = true;
           action.play();
           action.setEffectiveWeight(weight ?? 1);
-          action.time = n ? time + (n[1] - time) * u : time;
+          // interpolate clip time for motion-blur sub-frames; a looping clip that wraps between two
+          // frames (0.98 s -> 0.02 s) must go forward through the loop point, not back through the cycle
+          const dur = action.getClip().duration;
+          let t2 = n ? n[1] : time;
+          if (t2 - time > dur / 2) t2 -= dur; else if (time - t2 > dur / 2) t2 += dur;
+          let tt = time + (t2 - time) * u;
+          if (tt < 0) tt += dur; else if (tt > dur) tt -= dur;
+          action.time = tt;
         }
         act.mixer.update(0);
       }

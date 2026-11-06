@@ -307,7 +307,12 @@ def build_config():
     out.set_editor_property("output_directory", unreal.DirectoryPath(OUT))
     out.set_editor_property("file_name_format", "{sequence_name}.{frame_number}")
     out.set_editor_property("zero_pad_frame_numbers", 4)
-    out.set_editor_property("use_custom_playback_range", False)
+    first = int(JOB.get("renderStart") or 0)   # --resume: continue after the plates already on disk
+    out.set_editor_property("use_custom_playback_range", first > 0)
+    if first > 0:
+        out.set_editor_property("custom_start_frame", first)
+        out.set_editor_property("custom_end_frame", JOB["end"] - JOB["start"])
+        note("resuming at plate %d" % first)
     out.set_editor_property("override_existing_output", True)
     if not EAL.save_loaded_asset(cfg, False):
         raise RuntimeError("could not save " + path)

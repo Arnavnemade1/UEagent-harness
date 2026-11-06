@@ -109,7 +109,7 @@ hfilm ue plates film.mjs --project MyGame.uproject --map /Game/Maps/Stadium \
   --hide "Players,Ball"                 # outliner folders, actor labels or tag:Name: the film re-creates these
   --holdouts "Goals,Boards,Roof"        # what actors can pass behind, which also shadows them
   --grid M_Net --ground Pitch           # see-through net material; ground actor for the shadow catcher
-  [--preset /Game/Cinematics/MRQ_Final] [--memory 9] [--name shot] [--skip-render]
+  [--preset /Game/Cinematics/MRQ_Final] [--memory 9] [--name shot] [--skip-render] [--resume] [--timeout 120]
 ```
 
 Two headless Unreal runs, and your map is never modified:
@@ -126,7 +126,8 @@ Two headless Unreal runs, and your map is never modified:
 
 The film then reads `plates/<name>/plates.json` (see `examples/soccer-goal/film.mjs`). Change the
 choreography and only `hfilm render` runs again. Change a camera and re-run `plates`.
-`--skip-render` refreshes holdouts and sun without re-rendering.
+`--skip-render` refreshes holdouts and sun without re-rendering. `--resume` continues a render that was
+stopped (memory cap, timeout, crash) from the last plate on disk, as long as the cameras are unchanged.
 
 **Plates from anything else:** Blender, real footage with a solved camera, or a still. Give `plate`
 any numbered image sequence and make the film's camera match it.

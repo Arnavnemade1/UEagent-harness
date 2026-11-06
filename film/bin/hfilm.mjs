@@ -16,6 +16,7 @@ Usage
   hfilm bake <film> [-o baked.json]    evaluate the film to per-frame tracks (for other renderers / debugging)
   hfilm ue plates <film> --project P.uproject --map /Game/Maps/Level [--hide Folder,Label,tag:T] [--holdouts Folder,...]
                     [--grid MaterialName] [--ground ActorLabel] [--preset /Game/.../MRQConfig] [--memory 9] [--name shot] [--skip-render]
+                    [--resume] [--timeout 120]
                                        render background plates + holdouts + sun from Unreal for this film's cameras
   hfilm inspect <model.glb>            clips, durations, ground speed (m/s) per clip, height, facing
   hfilm init <dir> [--template basic|soccer-goal]
@@ -25,7 +26,7 @@ Docs: README.md next to this CLI. Every command accepts --json for machine-reada
 
 function parse(argv) {
   const out = { _: [] };
-  const flags = new Set(['json', 'show', 'help', 'skip-render']);
+  const flags = new Set(['json', 'show', 'help', 'skip-render', 'resume']);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-o') out.o = argv[++i];
@@ -94,7 +95,8 @@ async function main() {
     const res = await uePlates(rest[1] || fail('ue plates: missing <film> path'), {
       project: args.project, map: args.map, hide: args.hide, holdouts: args.holdouts, engine: args.engine, out: args.o,
       grid: args.grid, ground: args.ground, preset: args.preset, name: args.name, memoryGB: args.memory ? +args.memory : undefined,
-      temporalSamples: args['temporal-samples'], skipRender: !!args['skip-render'],
+      temporalSamples: args['temporal-samples'], skipRender: !!args['skip-render'], resume: !!args.resume,
+      timeoutMin: args.timeout ? +args.timeout : undefined,
       log: (m) => { if (!json) console.log(m); },
     });
     return say(res, `✓ plates: ${res.plates}\n✓ holdouts: ${res.holdouts} (${res.holdoutCount})\n✓ sun: ${JSON.stringify(res.sun)}`);

@@ -332,6 +332,7 @@ const TOOLS = [
         frames: str('render/bake: start:end (end exclusive).'),
         samples: num('render: sub-frame samples per frame (default from the film, usually 16-32).'),
         out: str('render: output .mp4 path.'),
+        resume: { type: 'boolean', description: 'plates: continue an interrupted plate render from the last plate on disk (cameras must be unchanged).' },
       },
       required: ['command'],
     },
@@ -603,6 +604,7 @@ const HANDLERS = {
     }
     for (const k of ['hide', 'holdouts', 'grid', 'ground', 'name', 'preset', 'frames', 'samples']) if (a[k] != null && a.command !== 'doctor') args.push(`--${k}`, String(a[k]));
     if (a.out) args.push('-o', a.out);
+    if (a.resume && a.command === 'plates') args.push('--resume');
     args.push('--json');
     const timeout = a.command === 'plates' ? 3 * 3600e3 : a.command === 'render' ? 3600e3 : 300e3;
     const res = await new Promise((resolve) => execFile(process.execPath, [cli, ...args], { timeout, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => resolve({ err, stdout, stderr })));
