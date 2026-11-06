@@ -11,11 +11,11 @@ export async function doctor() {
   const exe = findChrome();
   add('chrome', !!exe, exe || 'not found: install Google Chrome or set HFILM_CHROME');
   if (exe && major >= 22) {
-    let b;
+    let b, srv;
     try {
       b = await launchChrome({});
       const http = await import('node:http');
-      const srv = http.createServer((q, r) => { r.writeHead(200, { 'content-type': 'text/html' }); r.end('<!doctype html>ok'); });
+      srv = http.createServer((q, r) => { r.writeHead(200, { 'content-type': 'text/html' }); r.end('<!doctype html>ok'); });
       await new Promise((r) => srv.listen(0, '127.0.0.1', r));
       const p = await openPage(b.cdp, `http://127.0.0.1:${srv.address().port}/`);
       const g = await p.evaluate(`(async () => {
@@ -27,7 +27,7 @@ export async function doctor() {
         try { h264 = (await VideoEncoder.isConfigSupported({ codec: 'avc1.640028', width: 1280, height: 720, bitrate: 1e7, framerate: 30 })).supported; } catch {}
         return { webgl2: true, renderer, float: !!gl.getExtension('EXT_color_buffer_float'), h264 };
       })()`);
-      srv.close();
+      srv.close(); srv = null;
       const software = /swiftshader|llvmpipe|software/i.test(g.renderer || '');
       add('gpu', g.webgl2 && !software, g.webgl2 ? `${g.renderer}${software ? ' (software rendering: works, but slow)' : ''}` : 'WebGL2 unavailable');
       add('float-targets', !!g.float, g.float ? 'EXT_color_buffer_float' : 'missing: film-mode accumulation needs float render targets');
@@ -35,7 +35,7 @@ export async function doctor() {
     } catch (e) {
       add('gpu', false, `could not start headless Chrome: ${e.message.split('\n')[0]}`);
     } finally {
-      if (b) await b.close();
+      try { if (b) await b.close(); } finally { if (srv) { srv.closeAllConnections(); await new Promise((resolve) => srv.close(resolve)); } }
     }
   }
   const ue = findUnreal();

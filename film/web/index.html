@@ -58,7 +58,8 @@ window.hfilm = {
   async snapshot(frame, quality = 0.92) {
     const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', quality));
     const res = await fetch(`/frame/${frame}`, { method: 'POST', body: blob });
-    return res.ok;
+    if (!res.ok) throw new Error(`Frame write failed: HTTP ${res.status}`);
+    return true;
   },
 };
 

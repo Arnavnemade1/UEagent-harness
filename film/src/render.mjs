@@ -3,16 +3,21 @@ import path from 'node:path';
 import { launchChrome, openPage } from './chrome.mjs';
 import { startServer } from './server.mjs';
 import fs from 'node:fs';
-import { bakeFilm, FilmError, loadFilm } from './spec.mjs';
+import { FilmError } from './spec.mjs';
+import { acquireLease } from './lease.mjs';
+import { prepareFilm } from './preflight.mjs';
+import { modelInfo } from './media.mjs';
 
-export async function render(file, { out, frames, samples, framesDir, show = false, onProgress = () => {}, onLog = () => {}, probe = null } = {}) {
+export async function render(file, { out, frames, samples, quality, memoryGB, timeoutMin = 60, framesDir, show = false, onProgress = () => {}, onLog = () => {}, probe = null } = {}) {
   const t0 = Date.now();
-  const loaded = await loadFilm(file);
-  const { baked, assets, plate } = bakeFilm(loaded, { frames, samples });
+  if (!Number.isFinite(timeoutMin) || timeoutMin <= 0) throw new FilmError('timeoutMin must be positive');
+  const { loaded, baked, assets, plate, plan, report } = await prepareFilm(file, { frames, samples, quality, memoryGB });
   const outFile = out === false ? null : path.resolve(out || path.join(loaded.dir, 'out', `${path.basename(file).replace(/\.(m?js|json)$/, '')}.mp4`));
-  const server = await startServer({ baked, assets, plate, outFile, framesDir: framesDir ? path.resolve(framesDir) : null });
-  const browser = await launchChrome({ headless: !show, width: baked.width, height: baked.height, onLog });
+  const release = outFile ? acquireLease(outFile + '.render.lock') : () => {};
+  let browser, server;
   try {
+    server = await startServer({ baked, assets, plate, outFile, framesDir: framesDir ? path.resolve(framesDir) : null });
+    browser = await launchChrome({ headless: !show, width: baked.width, height: baked.height, onLog, memoryGB: plan.memoryGB, timeoutMs: timeoutMin * 60000 });
     const page = await openPage(browser.cdp, `${server.url}/?mode=render`, { width: baked.width, height: baked.height });
     for (let i = 0; i < 100 && !(await page.evaluate('!!window.hfilm')); i++) await new Promise((r) => setTimeout(r, 50));
     const info = await page.evaluate('hfilm.init()');
@@ -32,35 +37,40 @@ export async function render(file, { out, frames, samples, framesDir, show = fal
       ok: true, output: outFile, bytes, frames: count, fps: baked.fps, size: [baked.width, baked.height],
       samples: baked.render.samples, gpu: info.gpu, actors: info.actors, holdouts: info.holdouts, plate: info.plate,
       avgFrameMs: Math.round(total / count), seconds: Math.round((Date.now() - t0) / 100) / 10,
+      quality: plan, inputs: report.inputs, input_count: report.input_count, inputs_truncated: report.inputs_truncated, warnings: report.warnings,
+      resource: { peakProcessTreeBytes: browser.guard.peakBytes, memoryGB: plan.memoryGB, sampleIntervalMs: 3000 },
+      validation: outFile ? 'MP4 structure and encoded frame count validated before atomic publication' : 'rendered frames; no video requested',
     };
   } finally {
-    await browser.close();
-    await server.close();
+    try { await browser?.close(); } finally { try { await server?.close(); } finally { release(); } }
   }
 }
 
 export async function preview(file, { onLog = () => {} } = {}) {
-  const loaded = await loadFilm(file);
-  const { baked, assets, plate } = bakeFilm(loaded, {});
+  const { baked, assets, plate, plan } = await prepareFilm(file, { quality: 'preview' });
   const server = await startServer({ baked, assets, plate });
-  const browser = await launchChrome({ headless: false, width: Math.min(1440, baked.width + 40), height: Math.min(1000, baked.height + 120), onLog });
-  await openPage(browser.cdp, `${server.url}/?mode=preview`, { width: Math.min(1440, baked.width + 40), height: Math.min(1000, baked.height + 120) });
-  return { url: `${server.url}/?mode=preview`, close: async () => { await browser.close(); await server.close(); }, exited: new Promise((r) => browser.proc.on('exit', r)) };
+  let browser;
+  try {
+    browser = await launchChrome({ headless: false, width: Math.min(1440, baked.width + 40), height: Math.min(1000, baked.height + 120), onLog, memoryGB: plan.memoryGB });
+    await openPage(browser.cdp, `${server.url}/?mode=preview`, { width: Math.min(1440, baked.width + 40), height: Math.min(1000, baked.height + 120) });
+    return { url: `${server.url}/?mode=preview`, close: async () => { try { await browser.close(); } finally { await server.close(); } }, exited: new Promise((r) => { if (browser.proc.exitCode !== null || browser.proc.signalCode !== null) r(); else browser.proc.once('exit', r); }) };
+  } catch (e) { try { await browser?.close(); } finally { await server.close(); } throw e; }
 }
 
 /** Inspect a glTF/GLB model: clips, durations, natural ground speed, height, facing. */
 export async function inspect(model) {
   const abs = path.resolve(model);
   if (!fs.existsSync(abs)) throw new FilmError(`model not found: ${abs}`);
+  modelInfo(abs);
   const assets = { dirs: [path.dirname(abs)] };
   const server = await startServer({ baked: null, assets, plate: null });
-  const browser = await launchChrome({});
+  let browser;
   try {
+    browser = await launchChrome({});
     const page = await openPage(browser.cdp, `${server.url}/?mode=inspect`);
     for (let i = 0; i < 100 && !(await page.evaluate('!!window.hfilm')); i++) await new Promise((r) => setTimeout(r, 50));
     return { ok: true, model: abs, ...(await page.evaluate(`hfilm.inspect(${JSON.stringify(`/asset/0/${encodeURIComponent(path.basename(abs))}`)})`)) };
   } finally {
-    await browser.close();
-    await server.close();
+    try { await browser?.close(); } finally { await server.close(); }
   }
 }
