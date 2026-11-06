@@ -4,6 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as THREE from 'three';
+import { imageInfo, modelInfo } from './media.mjs';
+
+export const MATERIAL_TEXTURES = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap', 'alphaMap'];
 
 export class FilmError extends Error {}
 const fail = (msg) => { throw new FilmError(msg); };
@@ -34,11 +37,13 @@ export async function loadFilm(file) {
 
 /** Registry of local files the page may load. Each directory gets a URL prefix. */
 class Assets {
-  constructor(dir) { this.dir = dir; this.dirs = []; }
+  constructor(dir) { this.dir = dir; this.dirs = []; this.files = new Set(); }
   url(rel, where) {
     if (typeof rel !== 'string') fail(`${where}: expected a file path string`);
     const abs = path.resolve(this.dir, rel);
     if (!fs.existsSync(abs)) fail(`${where}: file not found: ${abs}`);
+    if (!fs.statSync(abs).isFile()) fail(`${where}: expected a regular file: ${abs}`);
+    this.files.add(abs);
     const d = path.dirname(abs);
     let i = this.dirs.indexOf(d);
     if (i < 0) { this.dirs.push(d); i = this.dirs.length - 1; }
@@ -50,7 +55,10 @@ function plateSource(plate, dir, where) {
   if (!plate) return null;
   const pattern = typeof plate === 'string' ? plate : plate.frames;
   if (typeof pattern !== 'string' || !/\{frame(:\d+)?\}/.test(pattern)) fail(`${where}.frames: expected a path pattern containing {frame} or {frame:4}, e.g. "plates/Shot.{frame:4}.jpeg"`);
-  return { pattern: path.resolve(dir, pattern), offset: plate.offset || 0, opacity: plate.opacity ?? 1 };
+  if ((pattern.match(/\{frame(?::\d+)?\}/g) || []).length !== 1) fail(`${where}: use exactly one frame placeholder`);
+  const offset = plate.offset ?? 0;
+  if (!Number.isInteger(offset)) fail(`${where}.offset: expected an integer`);
+  return { pattern: path.resolve(dir, pattern), offset, opacity: plate.opacity ?? 1 };
 }
 
 export function platePath(src, frame) {
@@ -68,12 +76,18 @@ function camState(c, f, aspect, where) {
     q = new THREE.Quaternion().setFromRotationMatrix(m).toArray();
   }
   const sensorW = c.sensorWidth ?? 36;
+  if (!Number.isFinite(sensorW) || sensorW <= 0) fail(`${where}.sensorWidth: expected positive millimetres`);
   let fov = c.fov;
   if (fov == null) {
     if (c.focalLength == null) fail(`${where} (frame ${f}): give fov (vertical degrees) or focalLength (mm)`);
+    if (!Number.isFinite(c.focalLength) || c.focalLength <= 0) fail(`${where}.focalLength: expected positive millimetres`);
     fov = THREE.MathUtils.radToDeg(2 * Math.atan((sensorW / aspect) / 2 / c.focalLength));
   }
   const focus = c.focusDistance ?? (c.target ? Math.hypot(...c.target.map((v, i) => v - pos[i])) : 10);
+  if (!Number.isFinite(fov) || fov <= 0 || fov >= 179 || !Number.isFinite(focus) || focus <= 0 || !Number.isFinite(c.fStop ?? 0) || (c.fStop ?? 0) < 0) fail(`${where}: invalid lens, focus distance or f-stop`);
+  const norm = Math.hypot(...q);
+  if (norm < 1e-10) fail(`${where}.quaternion: zero quaternion is invalid`);
+  q = q.map((v) => v / norm);
   return { pos, q, fov, focus: Math.max(0.05, focus), fstop: c.fStop || 0, sensorH: sensorW / aspect / 1000 };
 }
 
@@ -85,6 +99,11 @@ function xform(t, f, where) {
   else if (t.yaw != null) q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(t.yaw)).toArray();
   else if (t.rotation) q = new THREE.Quaternion().setFromEuler(new THREE.Euler(...vec(t.rotation, 3, `${where}.rotation`).map(THREE.MathUtils.degToRad), 'YXZ')).toArray();
   const s = t.scale == null ? [1, 1, 1] : typeof t.scale === 'number' ? [t.scale, t.scale, t.scale] : vec(t.scale, 3, `${where}.scale`);
+  vec(s, 3, `${where}.scale`);
+  if (t.yaw !== undefined && !Number.isFinite(t.yaw)) fail(`${where}.yaw: expected finite degrees`);
+  const norm = Math.hypot(...q);
+  if (!Number.isFinite(norm) || norm < 1e-10) fail(`${where}.quaternion: invalid rotation`);
+  q = q.map((v) => v / norm);
   return { p, q, s };
 }
 
@@ -116,14 +135,23 @@ function holdoutList(h, dir, where) {
 export function bakeFilm({ film, dir }, { frames, samples, ignorePlate = false } = {}) {
   const assets = new Assets(dir);
   const fps = film.fps ?? 30;
+  if (!Number.isFinite(fps) || fps <= 0 || fps > 240) fail('fps: expected a finite number in (0, 240]');
   const [width, height] = film.size || [film.width ?? 1280, film.height ?? 720];
   if (width % 2 || height % 2) fail(`size: width and height must be even (H.264), got ${width}x${height}`);
+  if (![width, height].every((n) => Number.isInteger(n) && n >= 2 && n <= 8192)) fail('size: expected dimensions from 2 to 8192');
   let [start, end] = film.frames || [0, Math.round((film.duration ?? 5) * fps)];
+  if (![start, end].every(Number.isSafeInteger)) fail('frames: expected integer endpoints');
+  if (frames && (!Array.isArray(frames) || frames.length !== 2 || !frames.every(Number.isSafeInteger))) fail('frames override: expected two integers');
   if (frames) [start, end] = [Math.max(start, frames[0]), Math.min(end, frames[1])];
   if (!(end > start)) fail(`frames: empty range [${start}, ${end})`);
   const aspect = width / height;
   const N = end - start;
   const R = film.render || {};
+  if (N > 100000 || N * ((film.actors?.length || 0) + 1) > 250000) fail('tracks: too many frame/actor samples for a bounded bake; split the production into shots');
+  const sampleCount = samples ?? R.samples ?? 16;
+  if (!Number.isInteger(sampleCount) || sampleCount < 1 || sampleCount > 256) fail('render.samples: expected integer 1..256');
+  if (!Number.isFinite(R.shutter ?? 0.5) || (R.shutter ?? 0.5) < 0 || (R.shutter ?? 0.5) > 1) fail('render.shutter: expected 0..1');
+  if (!['agx', 'aces', 'neutral', 'none'].includes(R.toneMapping || 'agx')) fail('render.toneMapping: expected agx, aces, neutral or none');
 
   // camera
   if (!film.camera) fail('camera: required. Give a function (frame) => ({ position, target, focalLength }) or a static object');
@@ -137,6 +165,7 @@ export function bakeFilm({ film, dir }, { frames, samples, ignorePlate = false }
   if (!cam.fstop.some((v) => v > 0)) delete cam.fstop;
   const c0 = isFn(film.camera) ? film.camera(start) : film.camera;
   cam.near = c0.near ?? 0.05; cam.far = c0.far ?? 5000;
+  if (!Number.isFinite(cam.near) || !Number.isFinite(cam.far) || cam.near <= 0 || cam.far <= cam.near) fail('camera.near/far: require 0 < near < far');
 
   // actors
   const ids = new Set();
@@ -148,7 +177,14 @@ export function bakeFilm({ film, dir }, { frames, samples, ignorePlate = false }
     if (typeof a.model === 'string') model = { url: assets.url(a.model, `${where}.model`) };
     else {
       model = { ...(a.model || { primitive: 'sphere', radius: 0.5 }) };
-      if (model.material?.map) model.material = { ...model.material, map: assets.url(model.material.map, `${where}.model.material.map`) };
+      if (model.material) {
+        model.material = { ...model.material };
+        for (const field of MATERIAL_TEXTURES) if (model.material[field]) {
+          if (!/\.(png|jpe?g|webp)$/i.test(model.material[field])) fail(`${where}.material.${field}: use PNG, JPEG or WebP textures`);
+          model.material[field] = assets.url(model.material[field], `${where}.model.material.${field}`);
+        }
+        if (model.material.normalScale) vec(model.material.normalScale, 2, `${where}.model.material.normalScale`);
+      }
     }
     const tf = isFn(a.transform) ? a.transform : () => a.transform || {};
     const out = { id: a.id || `actor${idx}`, model, tint: a.tint, castShadow: a.castShadow, receiveShadow: a.receiveShadow, position: [], quaternion: [], scale: [] };
@@ -174,7 +210,14 @@ export function bakeFilm({ film, dir }, { frames, samples, ignorePlate = false }
   });
 
   const plate = ignorePlate ? null : plateSource(film.plate, dir, 'plate');
-  if (plate) for (const f of [start, end - 1]) if (!fs.existsSync(platePath(plate, f))) fail(`plate: missing plate for frame ${f}: ${platePath(plate, f)}`);
+  const plateWarnings = [];
+  if (plate) for (let f = start; f < end; f++) {
+    const file = platePath(plate, f);
+    if (!fs.existsSync(file)) fail(`plate: missing plate for frame ${f}: ${file}`);
+    const info = imageInfo(file);
+    if (info.width && (info.width !== width || info.height !== height) && plateWarnings.length < 3) plateWarnings.push(`plate frame ${f}: ${info.width}x${info.height} will be resampled to ${width}x${height}`);
+  }
+  if (film.environment?.hdri && !/\.(hdr|exr)$/i.test(film.environment.hdri)) fail('environment.hdri: use a Radiance HDR or OpenEXR environment');
   const env = film.environment ? { ...film.environment, hdri: film.environment.hdri ? assets.url(film.environment.hdri, 'environment.hdri') : null } : null;
   let sun = film.sun ?? { direction: [0.4, 1, 0.3] };
   if (sun) {
@@ -187,7 +230,7 @@ export function bakeFilm({ film, dir }, { frames, samples, ignorePlate = false }
   }
   const baked = {
     version: 1, fps, width, height, start, end, cuts: (film.cuts || []).filter((c) => c > start && c < end),
-    render: { samples: samples ?? R.samples ?? 16, shutter: R.shutter ?? 0.5, toneMapping: R.toneMapping || 'agx', exposure: R.exposure ?? 1, dof: R.dof !== false, dither: R.dither ?? 1, bitrate: R.bitrate },
+    render: { samples: sampleCount, shutter: R.shutter ?? 0.5, toneMapping: R.toneMapping || 'agx', exposure: R.exposure ?? 1, dof: R.dof !== false, dither: R.dither ?? 1, bitrate: R.bitrate },
     plate: plate ? { url: '/plate/{frame}', opacity: plate.opacity } : null,
     background: film.background === undefined ? '#000000' : film.background,
     environment: env, sun, ambient: film.ambient || null,
@@ -196,5 +239,13 @@ export function bakeFilm({ film, dir }, { frames, samples, ignorePlate = false }
     grade: film.grade || null,
     camera: cam, actors,
   };
-  return { baked, assets, plate, frames: N };
+  const media = [];
+  for (const file of assets.files) {
+    if (/\.gl(?:tf|b)$/i.test(file)) {
+      const model = modelInfo(file); media.push({ ...model, kind: 'model' });
+      for (const dependency of model.dependencies) assets.files.add(dependency);
+    } else if (/\.(png|jpe?g|webp|hdr|exr)$/i.test(file)) media.push({ ...imageInfo(file), kind: 'image' });
+    else media.push({ file, kind: 'buffer', bytes: fs.statSync(file).size });
+  }
+  return { baked, assets, plate, frames: N, media, warnings: plateWarnings };
 }
