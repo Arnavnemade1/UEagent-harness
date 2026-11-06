@@ -36,14 +36,15 @@ node ~/ue-agent-harness/bin/ue-agent.mjs setup /path/to/MyGame/MyGame.uproject
 |---|---|
 | Links the plugin (a symlink, so nothing is copied; use `--copy` to copy it instead) | `MyGame/Plugins/UEAgentBridge` |
 | Enables `PythonScriptPlugin`, `EditorScriptingUtilities` and `UEAgentBridge` | `MyGame.uproject` (backed up once) |
-| Registers the `unreal` MCP server for Claude Code (local scope) | `claude mcp add`, or `.mcp.json` |
+| Registers the `unreal` MCP server for Claude Code, pre-approved for every Claude account and config folder | `.mcp.json` + `.claude/settings.local.json` |
 | Pre-approves the editor tools for Claude Code, and adds a Stop hook that asks Claude to build when it leaves C++ uncompiled | `.claude/settings.local.json` |
 | Registers `[mcp_servers.unreal]` for Codex, with a 30-minute tool timeout | `~/.codex/config.toml` (inside a marked block) |
 | Writes agent guidance: workflow, verification and conventions | `AGENTS.md`, plus `CLAUDE.md` importing it |
 
 Then open (or restart) the project in Unreal and run `ue-agent doctor`.
 
-`ue-agent uninstall <project>` removes exactly what setup added.
+`ue-agent uninstall <project>` removes exactly what setup added. After updating the harness, `ue-agent reload` loads the
+new plugin code into a running editor without restarting it.
 
 **Approvals.** Every agent edit is one labelled undo step, so the editor tools are pre-approved.
 `ue_python` still asks for approval each time, because it runs arbitrary code inside the editor
@@ -134,10 +135,25 @@ last call, and also on the next start if the editor crashed while it was off.
 - **Runaway Python:** `ue_python` aborts runaway code after `timeout_s`. A loop that never calls
   any function can't be interrupted from Python.
 
+## Tested on real hardware
+
+UE 5.8.4 (Launcher build) on macOS 26.5 with an Apple M4 and 16 GB of RAM, Xcode 26.1.1:
+
+| | |
+|---|---|
+| Plugin startup | about 3 s, with no Python errors |
+| Round trip, editor in the background | p50 ≈ 21 ms with throttling lifted (about 335 ms without it) |
+| Pipelined calls | 50 calls in ≈ 24 ms |
+
+Notes from that testing:
+
+- **Editor log location:** macOS writes it to `~/Library/Logs/Unreal Engine/<Project>Editor/`, and the harness finds it there.
+- **Required tools:** Unreal on macOS needs Xcode's Metal toolchain even for Blueprint-only projects. Run `xcodebuild -downloadComponent MetalToolchain`.
+
 ## Development
 
 ```sh
-npm test   # 36 tests: real plugin code vs. a fake `unreal` module, MCP protocol, setup, hooks
+npm test   # 38 tests: real plugin code vs. a fake `unreal` module, MCP protocol, setup, hooks
 python3 test/fake/fake_editor.py /tmp/FakeGame   # a fake editor you can point real agents at
 ```
 

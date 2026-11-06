@@ -21,6 +21,7 @@ const HELP = `ue-agent ${VERSION} — connect Claude Code / Codex to Unreal Edit
   ue-agent status [--project P]      Editor context as JSON
   ue-agent py "<python>"             Run Python in the editor
   ue-agent call <op> ['<json args>'] Call a bridge op directly
+  ue-agent reload                    Reload the editor plugin's code without restarting the editor
   ue-agent logs [--severity error|warning|all] [--lines N]
   ue-agent build [--restart-editor]  Compile C++ with diagnostics
   ue-agent ask --agent claude|codex "<request>" [--continue]
@@ -46,8 +47,7 @@ async function main() {
     case 'setup': {
       const res = setup({
         project: args._[0] || args.project, copy: !!args.copy, claude: args.claude !== false, codex: args.codex !== false,
-        hooks: args.hooks !== false, docs: args.docs !== false, claudeMode: args['claude-config'] || 'auto',
-        autoApprove: args['auto-approve'] !== false, trustPython: !!args['trust-python'],
+        hooks: args.hooks !== false, docs: args.docs !== false,         autoApprove: args['auto-approve'] !== false, trustPython: !!args['trust-python'],
       });
       print(res.report.map((l) => `• ${l}`).join('\n'));
       print('\nNext: open (or restart) the project in Unreal Editor, then run `ue-agent doctor`.');
@@ -73,6 +73,18 @@ async function main() {
         const r = await c.call(args._[0], args._[1] ? JSON.parse(args._[1]) : {}, { timeout: Number(args.timeout || 120) * 1000 });
         print(r.result);
         if (r.warnings) print({ warnings: r.warnings });
+        return 0;
+      });
+    case 'reload':
+      return withClient(args, async (c) => {
+        const before = (await c.connect()).started;
+        await c.call('python', { code: 'import ue_agent_bridge; ue_agent_bridge.restart()' });
+        c.close();
+        const fresh = new BridgeClient({ project: c.project, clientName: 'cli', subscribe: false });
+        try {
+          const info = await fresh.waitForEditor(30000);
+          print(`bridge reloaded (v${info.version}, port ${info.port}${info.started === before ? '' : ''})`);
+        } finally { fresh.close(); }
         return 0;
       });
     case 'logs': {

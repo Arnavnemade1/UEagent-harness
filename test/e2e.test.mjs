@@ -304,9 +304,20 @@ describe('bridge robustness and speed', () => {
     }
   });
 
-  it('unthrottles the editor while agents are active', async () => {
-    const r = await claude.tool('ue_python', { code: 'unreal.get_default_object(unreal.EditorPerformanceSettings).get_editor_property("throttle_cpu_when_not_foreground")' });
+  it('unthrottles the editor while agents are active (class hidden from Python, as in UE 5.8)', async () => {
+    const r = await claude.tool('ue_python', { code: 'unreal.get_default_object(unreal.load_class(None, "/Script/UnrealEd.EditorPerformanceSettings")).get_editor_property("bThrottleCPUWhenNotForeground")' });
     assert.equal(r.json.result, false);
+    const st = await claude.tool('ue_status');
+    assert.deepEqual(st.json.background_throttle, { controlled: true, disabled_for_agents: true });
+  });
+
+  it('hot-reloads the plugin code and agents reconnect on their own', async () => {
+    const r = await codex.tool('ue_python', { code: 'import ue_agent_bridge; ue_agent_bridge.restart()' });
+    assert.equal(r.isError, undefined, r.text.join('\n'));
+    await new Promise((res) => setTimeout(res, 600));
+    const after = await claude.tool('ue_find_actors', { name: 'Cube' });
+    assert.equal(after.json.total, 1, after.text.join('\n'));
+    assert.equal((await codex.tool('ue_status')).json.editor, 'connected');
   });
 
   it('reconnects transparently after the editor restarts', async () => {

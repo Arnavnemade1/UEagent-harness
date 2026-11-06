@@ -103,7 +103,7 @@ describe('setup / uninstall', () => {
     fs.mkdirSync(codexDir, { recursive: true });
     fs.writeFileSync(path.join(codexDir, 'config.toml'), 'model = "x"\n\n[mcp_servers.other]\ncommand = "foo"\n');
     fs.writeFileSync(path.join(proj.dir, 'CLAUDE.md'), '# My project notes\n');
-    let r = run(proj, ['setup', proj.project, '--claude-config', 'file']);
+    let r = run(proj, ['setup', proj.project]);
     assert.equal(r.status, 0, r.stderr);
     const link = path.join(proj.dir, 'Plugins', 'UEAgentBridge');
     assert.ok(fs.lstatSync(link).isSymbolicLink());
@@ -116,6 +116,7 @@ describe('setup / uninstall', () => {
     assert.match(hooks.hooks.Stop[0].hooks[0].command, /hook claude-stop/);
     assert.ok(hooks.permissions.allow.includes('mcp__unreal__ue_edit_actors'));
     assert.ok(!hooks.permissions.allow.includes('mcp__unreal__ue_python'), 'python keeps its prompt by default');
+    assert.deepEqual(hooks.enabledMcpjsonServers, ['unreal'], '.mcp.json server pre-approved for every Claude account');
     const toml = fs.readFileSync(path.join(codexDir, 'config.toml'), 'utf8');
     assert.match(toml, /\[mcp_servers\.other\]/);
     assert.match(toml, /\[mcp_servers\.unreal\]\ncommand = ".*node.*"\nargs = \[".*ue-agent\.mjs", "mcp"\]\nstartup_timeout_sec = 20\ntool_timeout_sec = 1800\ndefault_tools_approval_mode = "approve"\n\n\[mcp_servers\.unreal\.tools\.ue_python\]\napproval_mode = "prompt"/);
@@ -126,7 +127,7 @@ describe('setup / uninstall', () => {
 
     const snapshot = () => ['AGENTS.md', 'CLAUDE.md', '.mcp.json', 'SetupGame.uproject', '.claude/settings.local.json'].map((f) => fs.readFileSync(path.join(proj.dir, f), 'utf8')).join('|') + fs.readFileSync(path.join(codexDir, 'config.toml'), 'utf8');
     const before = snapshot();
-    r = run(proj, ['setup', proj.project, '--claude-config', 'file']);
+    r = run(proj, ['setup', proj.project]);
     assert.equal(r.status, 0, r.stderr);
     assert.equal(snapshot(), before, 'second setup must not change anything');
 
@@ -139,7 +140,7 @@ describe('setup / uninstall', () => {
     assert.ok(!JSON.parse(fs.readFileSync(path.join(proj.dir, '.mcp.json'), 'utf8')).mcpServers.unreal);
     assert.ok(!fs.existsSync(path.join(proj.dir, '.claude', 'settings.local.json')), 'settings file we created is removed');
 
-    r = run(proj, ['setup', proj.project, '--claude-config', 'file', '--trust-python', '--no-hooks']);
+    r = run(proj, ['setup', proj.project, '--trust-python', '--no-hooks']);
     assert.equal(r.status, 0, r.stderr);
     const trusted = JSON.parse(fs.readFileSync(path.join(proj.dir, '.claude', 'settings.local.json'), 'utf8'));
     assert.deepEqual(trusted.permissions.allow, ['mcp__unreal']);
@@ -152,7 +153,7 @@ describe('setup / uninstall', () => {
     const codexDir = path.join(proj.home, '.codex');
     fs.mkdirSync(codexDir, { recursive: true });
     fs.writeFileSync(path.join(codexDir, 'config.toml'), '[mcp_servers.unreal]\ncommand = "mine"\n');
-    const r = run(proj, ['setup', proj.project, '--claude-config', 'file', '--no-hooks']);
+    const r = run(proj, ['setup', proj.project, '--no-hooks']);
     assert.match(r.stdout, /already defines mcp_servers\.unreal/);
     assert.equal(fs.readFileSync(path.join(codexDir, 'config.toml'), 'utf8'), '[mcp_servers.unreal]\ncommand = "mine"\n');
     fs.rmSync(proj.root, { recursive: true, force: true });

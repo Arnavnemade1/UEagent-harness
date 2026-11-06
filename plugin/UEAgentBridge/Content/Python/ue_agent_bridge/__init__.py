@@ -53,6 +53,43 @@ def start(port=None, token=None):
     return srv
 
 
+_MODULE_ORDER = ("registry", "compat", "values", "scene", "watch", "server", "ops_core", "ops_actors",
+                 "ops_assets", "ops_editor", "ops_blueprint", "ops_transfer", "menu")
+
+
+def _reload_modules():
+    import importlib
+    import sys
+
+    for n in _MODULE_ORDER:  # dependency order: ops re-register into the fresh registry
+        m = sys.modules.get(__name__ + "." + n)
+        if m is not None:
+            importlib.reload(m)
+    importlib.reload(sys.modules[__name__])
+
+
+def restart(reload_code=True):
+    """Restart the bridge on the next editor tick, optionally picking up new plugin code.
+
+    Deferred so it is safe to call from inside a bridge call (the reply is sent first).
+    """
+    holder = {}
+
+    def _go(_dt):
+        unreal.unregister_slate_post_tick_callback(holder["h"])
+        try:
+            if reload_code:
+                _reload_modules()
+            import ue_agent_bridge as pkg
+
+            pkg.start()
+        except Exception as exc:
+            unreal.log_error("[UEAgentBridge] restart failed: %s" % exc)
+
+    holder["h"] = unreal.register_slate_post_tick_callback(_go)
+    return True
+
+
 def stop():
     srv = get_server()
     if srv is not None:

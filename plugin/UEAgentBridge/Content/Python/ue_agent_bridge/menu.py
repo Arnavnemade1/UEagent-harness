@@ -322,7 +322,7 @@ def _install_menu():
         ("Continue", "Continue Conversation...", "Follow up in the last agent conversation", mod + "continue_last()"),
         ("Stop", "Stop Agent", "Stop the agent request that is running", mod + "stop()"),
         ("Status", "Bridge Status", "Show the bridge port, connected agents and activity", mod + "show_status()"),
-        ("Restart", "Restart Bridge", "Restart the local agent bridge", "import ue_agent_bridge as _b; _b.start()"),
+        ("Restart", "Restart Bridge", "Reload the bridge code and restart it (no editor restart needed)", "import ue_agent_bridge as _b; _b.restart()"),
     ]
     for name, label, tip, cmd in items:
         e = unreal.ToolMenuEntry(name=name, type=unreal.MultiBlockType.MENU_ENTRY)

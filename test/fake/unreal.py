@@ -713,8 +713,14 @@ class WorldFactory(Factory):
     _props = {}
 
 
-class EditorPerformanceSettings(Object):
-    _props = {"throttle_cpu_when_not_foreground": ("bool", True)}
+class _EditorPerformanceSettings(Object):
+    # UE 5.8 does not expose this class to Python: reachable only via load_class, native property names
+    _props = {"bThrottleCPUWhenNotForeground": ("bool", True)}
+    _class_name = "EditorPerformanceSettings"
+    _class_path = "/Script/UnrealEd.EditorPerformanceSettings"
+
+
+_HIDDEN_CLASSES = {"EditorPerformanceSettings": _EditorPerformanceSettings}
 
 
 _DEFAULTS = {}
@@ -1401,7 +1407,7 @@ def find_object(outer, path):
 def load_class(outer, path):
     name = path.rsplit(".", 1)[-1]
     if path.startswith("/Script/"):
-        t = globals().get(name)
+        t = _HIDDEN_CLASSES.get(name) or globals().get(name)
         return Class(t) if isinstance(t, type) and issubclass(t, Object) else None
     if name.endswith("_C"):
         return EditorAssetLibrary.load_blueprint_class(path.split(".")[0])

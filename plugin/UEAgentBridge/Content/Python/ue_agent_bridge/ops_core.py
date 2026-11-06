@@ -43,6 +43,7 @@ def status(ctx, a):
     out["unsaved"] = {"count": len(dirty), "packages": sorted(dirty)[:20]}
     if srv.last_txn:
         out["last_agent_transaction"] = srv.last_txn
+    out["background_throttle"] = {"controlled": srv.throttle.controlled, "disabled_for_agents": srv.throttle.disabled_by_us}
     return out
 
 

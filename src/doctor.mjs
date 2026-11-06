@@ -54,7 +54,9 @@ export async function doctor({ project, bench = 50 } = {}) {
       if (hello.version !== VERSION) add('warn', 'version', `plugin ${hello.version} vs harness ${VERSION}: restart the editor to load the current plugin`);
       const pings = [];
       for (let i = 0; i < bench; i++) pings.push(await client.ping());
-      add('ok', `round-trip latency (${bench} pings)`, `p50 ${pct(pings, 0.5).toFixed(2)} ms · p95 ${pct(pings, 0.95).toFixed(2)} ms · max ${Math.max(...pings).toFixed(2)} ms`);
+      const p50 = pct(pings, 0.5);
+      add(p50 < 60 ? 'ok' : 'warn', `round-trip latency (${bench} pings)`, `p50 ${p50.toFixed(2)} ms · p95 ${pct(pings, 0.95).toFixed(2)} ms · max ${Math.max(...pings).toFixed(2)} ms`
+        + (p50 < 60 ? '' : ' (editor is ticking slowly: background throttling not lifted; run `ue-agent reload` or update the plugin)'));
       const calls = [];
       for (let i = 0; i < Math.min(bench, 20); i++) {
         const t = process.hrtime.bigint();
@@ -74,10 +76,18 @@ export async function doctor({ project, bench = 50 } = {}) {
 
   const claude = which('claude');
   const mcpJson = readJson(path.join(info.dir, '.mcp.json'));
-  const claudeJson = readJson(path.join(process.env.HOME || '', '.claude.json'));
-  const localEntry = claudeJson?.projects?.[info.dir]?.mcpServers?.unreal;
-  const claudeOk = !!(mcpJson?.mcpServers?.unreal || localEntry);
-  add(claudeOk ? 'ok' : 'warn', 'Claude Code', claudeOk ? `MCP server "unreal" configured${claude ? '' : ' (claude CLI not on PATH)'}` : 'not configured: run ue-agent setup');
+  const local = readJson(path.join(info.dir, '.claude', 'settings.local.json')) || {};
+  const shared = readJson(path.join(info.dir, '.claude', 'settings.json')) || {};
+  const approved = [local, shared].some((x) => x.enableAllProjectMcpServers || (x.enabledMcpjsonServers || []).includes('unreal'));
+  const configDirs = [process.env.CLAUDE_CONFIG_DIR, path.join(process.env.HOME || '', '.claude')].filter(Boolean);
+  const localScope = configDirs.some((d) => {
+    const j = readJson(path.join(d, '.claude.json')) || readJson(path.join(path.dirname(d), '.claude.json'));
+    return !!j?.projects?.[info.dir]?.mcpServers?.unreal;
+  });
+  const claudeOk = (mcpJson?.mcpServers?.unreal && approved) || localScope;
+  add(claudeOk ? 'ok' : 'warn', 'Claude Code', claudeOk
+    ? `MCP server "unreal" ${mcpJson?.mcpServers?.unreal ? 'in .mcp.json (pre-approved)' : 'in local config'}${claude ? '' : ' (claude CLI not on PATH)'}`
+    : mcpJson?.mcpServers?.unreal ? '.mcp.json has "unreal" but it is not approved: run ue-agent setup' : 'not configured: run ue-agent setup');
   const codexCfg = fs.existsSync(codexConfigPath()) ? fs.readFileSync(codexConfigPath(), 'utf8') : '';
   const codexOk = /\[mcp_servers\.unreal\]/.test(codexCfg);
   add(codexOk ? 'ok' : 'warn', 'Codex', codexOk ? `configured in ${codexConfigPath()}` : 'not configured: run ue-agent setup');

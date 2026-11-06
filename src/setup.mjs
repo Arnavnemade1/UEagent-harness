@@ -91,32 +91,27 @@ function claudeAllowRules(trustPython) {
 
 const isOurRule = (r) => r === 'mcp__unreal' || String(r).startsWith('mcp__unreal__');
 
-function configureClaude(projectFile, { mode, hooks, autoApprove, trustPython }, report) {
+function configureClaude(projectFile, { hooks, autoApprove, trustPython }, report) {
   const projectDir = path.dirname(projectFile);
+  // Project-level .mcp.json works for every Claude Code account/config dir (CLAUDE_CONFIG_DIR),
+  // unlike `claude mcp add --scope local`, which only writes the active config.
+  const mcpFile = path.join(projectDir, '.mcp.json');
+  const mj = readJson(mcpFile, {}) || {};
+  mj.mcpServers = { ...(mj.mcpServers || {}), unreal: mcpEntry(projectFile) };
+  fs.writeFileSync(mcpFile, JSON.stringify(mj, null, 2) + '\n');
+  report.push(`claude code: registered MCP server "unreal" in ${mcpFile} (all Claude accounts)`);
+  // drop a local-scope duplicate left by older versions of this tool (only if one exists)
+  const configs = [process.env.CLAUDE_CONFIG_DIR && path.join(process.env.CLAUDE_CONFIG_DIR, '.claude.json'), path.join(os.homedir(), '.claude.json')].filter(Boolean);
   const claude = which('claude');
-  let viaCli = false;
-  if (mode !== 'file' && claude) {
-    try {
-      try { execFileSync(claude, ['mcp', 'remove', '--scope', 'local', 'unreal'], { cwd: projectDir, stdio: 'ignore' }); } catch { /* not there */ }
-      execFileSync(claude, ['mcp', 'add', '--scope', 'local', 'unreal', '-e', `UE_AGENT_PROJECT=${projectFile}`, '--', process.execPath, CLI_PATH, 'mcp'],
-        { cwd: projectDir, stdio: 'pipe' });
-      viaCli = true;
-      report.push('claude code: registered MCP server "unreal" (local scope for this project)');
-    } catch (e) {
-      report.push(`claude code: \`claude mcp add\` failed (${String(e.message).split('\n')[0]}); writing .mcp.json instead`);
-    }
-  }
-  if (!viaCli) {
-    const file = path.join(projectDir, '.mcp.json');
-    const j = readJson(file, {}) || {};
-    j.mcpServers = { ...(j.mcpServers || {}), unreal: mcpEntry(projectFile) };
-    fs.writeFileSync(file, JSON.stringify(j, null, 2) + '\n');
-    report.push(`claude code: wrote ${file}`);
+  if (claude && configs.some((f) => readJson(f)?.projects?.[projectDir]?.mcpServers?.unreal)) {
+    try { execFileSync(claude, ['mcp', 'remove', '--scope', 'local', 'unreal'], { cwd: projectDir, stdio: 'ignore' }); } catch { /* none */ }
+    report.push('claude code: removed the old local-scope entry (superseded by .mcp.json)');
   }
   const file = path.join(projectDir, '.claude', 'settings.local.json');
   const original = readJson(file, null);
   const j = JSON.parse(JSON.stringify(original || {}));
   const kept = (j.permissions?.allow || []).filter((r) => !isOurRule(r));
+  j.enabledMcpjsonServers = [...new Set([...(j.enabledMcpjsonServers || []), 'unreal'])]; // pre-approve .mcp.json entry
   if (autoApprove) {
     j.permissions = { ...(j.permissions || {}), allow: [...kept, ...claudeAllowRules(trustPython)] };
     report.push(`claude code: editor tools pre-approved${trustPython ? ' (including ue_python)' : '; ue_python still asks (use --trust-python to allow)'}`);
@@ -173,7 +168,7 @@ function writeDocs(projectDir, report) {
   if (upsertBlock(claudeMd, MD_BEGIN, MD_END, '@AGENTS.md')) report.push(`docs: ${claudeMd} imports AGENTS.md (read by Claude Code)`);
 }
 
-export function setup({ project, copy = false, claude = true, codex = true, hooks = true, docs = true, claudeMode = 'auto', autoApprove = true, trustPython = false } = {}) {
+export function setup({ project, copy = false, claude = true, codex = true, hooks = true, docs = true, autoApprove = true, trustPython = false } = {}) {
   const projectFile = findProject({ explicit: project });
   if (!projectFile || !projectFile.endsWith('.uproject')) throw new Error('No .uproject found. Pass the project: ue-agent setup /path/to/MyGame.uproject');
   const projectDir = path.dirname(projectFile);
@@ -182,7 +177,7 @@ export function setup({ project, copy = false, claude = true, codex = true, hook
   enablePlugins(projectFile, report);
   saveConfig({ version: VERSION, node: process.execPath, cli: CLI_PATH, claude: which('claude'), codex: which('codex') });
   report.push('config: ~/.ue-agent-harness/config.json (paths used by the in-editor Agents menu)');
-  if (claude) configureClaude(projectFile, { mode: claudeMode, hooks, autoApprove, trustPython }, report);
+  if (claude) configureClaude(projectFile, { hooks, autoApprove, trustPython }, report);
   if (codex) configureCodex({ autoApprove, trustPython }, report);
   if (docs) writeDocs(projectDir, report);
   return { projectFile, report };
@@ -223,6 +218,10 @@ export function uninstall({ project, codex = true } = {}) {
       if (!sj.hooks.Stop.length) delete sj.hooks.Stop;
       if (!Object.keys(sj.hooks).length) delete sj.hooks;
       report.push('claude code: removed Stop hook');
+    }
+    if (sj.enabledMcpjsonServers) {
+      sj.enabledMcpjsonServers = sj.enabledMcpjsonServers.filter((n) => n !== 'unreal');
+      if (!sj.enabledMcpjsonServers.length) delete sj.enabledMcpjsonServers;
     }
     if (sj.permissions?.allow) {
       sj.permissions.allow = sj.permissions.allow.filter((r) => !isOurRule(r));

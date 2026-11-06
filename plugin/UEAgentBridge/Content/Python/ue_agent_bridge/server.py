@@ -83,24 +83,51 @@ class Throttle(object):
     original value is restored once agents go quiet, so idle CPU stays low.
     """
 
-    PROP = "throttle_cpu_when_not_foreground"
+    # UE 5.8 does not expose EditorPerformanceSettings to Python by name, and its
+    # pythonized alias is then missing too: fall back to reflection + the native name.
+    CLASS_PATH = "/Script/UnrealEd.EditorPerformanceSettings"
+    NAMES = ("throttle_cpu_when_not_foreground", "bThrottleCPUWhenNotForeground")
 
     def __init__(self, state_path):
         self.state_path = state_path
         self.disabled_by_us = False
         self.last_activity = 0.0
         self._settings = None
+        self.PROP = None
+        self._warned = False
         self._recover()
 
     def _obj(self):
         if self._settings is None:
             cls = getattr(unreal, "EditorPerformanceSettings", None)
+            if cls is None:
+                try:
+                    cls = unreal.load_class(None, self.CLASS_PATH)
+                except Exception:
+                    cls = None
+            obj = None
             if cls is not None:
                 try:
-                    self._settings = unreal.get_default_object(cls)
+                    obj = unreal.get_default_object(cls)
                 except Exception:
-                    self._settings = None
+                    obj = None
+            if obj is not None:
+                for n in self.NAMES:
+                    try:
+                        obj.get_editor_property(n)
+                        self.PROP = n
+                        self._settings = obj
+                        break
+                    except Exception:
+                        pass
+            if self._settings is None and not self._warned:
+                self._warned = True
+                unreal.log_warning("[UEAgentBridge] cannot control 'Use Less CPU when in Background'; agent calls may be slow while the editor is in the background")
         return self._settings
+
+    @property
+    def controlled(self):
+        return self._obj() is not None
 
     def _recover(self):
         # if the editor crashed while we had throttling disabled, put it back
