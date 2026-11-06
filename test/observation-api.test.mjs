@@ -60,6 +60,14 @@ for i in range(20): skinned._comps.append(unreal.SceneComponent('Extra%d' % i, s
 partial = capture({'targets': ['Character'], 'components': True})['actors'][0]
 assert partial['component_count'] == 22
 assert len(partial['components']) == 12
+# find_object can resolve an actor from another loaded world. It must not be
+# attributed to the current project's editor/PIE world in the observation.
+outside = unreal.Actor('OtherWorldActor', world)
+original_find = unreal.find_object
+unreal.find_object = lambda outer, name: outside if name == outside.get_path_name() else original_find(outer, name)
+foreign = capture({'targets': [outside.get_path_name()]})
+assert foreign['actors'] == []
+assert foreign['missing_targets'] == [outside.get_path_name()]
 `;
   const result = spawnSync('python3', ['-c', script, proj.dir, proj.project], {
     env: { ...process.env, HOME: proj.home, PYTHONPATH: [path.join(ROOT, 'test/fake'), path.join(ROOT, 'plugin/UEAgentBridge/Content/Python')].join(path.delimiter) },

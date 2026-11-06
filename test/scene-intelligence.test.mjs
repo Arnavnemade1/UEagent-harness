@@ -14,6 +14,7 @@ it('classifies camera framing conservatively, including behind-camera and near-p
     assert.equal(result.occlusion, 'unknown');
   }
   assert.deepEqual(framing(actor([1000, 0, 0]), camera).center_uv, [0.5, 0.5]);
+  assert.equal(framing(actor([1000, 1000, 0], [0, 0, 0]), camera).state, 'inside', 'frustum boundary tolerates floating-point roundoff');
   assert.equal(framing(actor([0, 1000, 0]), { ...camera, rotation: [0, 90, 0] }).state, 'inside');
   assert.equal(framing(actor([0, 0, 1000]), { ...camera, rotation: [90, 0, 0] }).state, 'inside');
   assert.equal(framing(actor([1000, 0, 0]), { ...camera, hfov: null }).state, 'unknown');

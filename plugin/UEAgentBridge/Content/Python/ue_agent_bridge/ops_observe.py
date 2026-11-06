@@ -35,6 +35,8 @@ def _camera(sc, target, projection):
                "rotation": values.rot_json(rot) if rot else None, "projection": "perspective" if projection else None}
     else:
         actor = sc.one(target)
+        if not any(candidate.get_path_name() == actor.get_path_name() for candidate in sc.actors()):
+            raise BridgeError("bad_args", "camera is not in the observed world")
         cls = getattr(unreal, "CameraComponent", None)
         comp = actor.get_component_by_class(cls) if cls else None
         if comp is None:
@@ -152,6 +154,7 @@ def observe(ctx, a):
     missing = []
     acts = []
     if targets:
+        world_paths = set(actor.get_path_name() for actor in sc.actors())
         for target in targets:
             # Literal identity only: a wildcard returning one actor today is not
             # a durable identity for verification or a future repair.
@@ -159,6 +162,9 @@ def observe(ctx, a):
                 raise BridgeError("bad_args", "targets require exact actor paths or unique labels; use filter for groups")
             try:
                 actor = sc.one(target)
+                if actor.get_path_name() not in world_paths:
+                    missing.append(target)
+                    continue
                 if actor not in acts:
                     acts.append(actor)
             except BridgeError as exc:

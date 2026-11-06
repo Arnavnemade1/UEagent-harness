@@ -41,7 +41,8 @@ function resolve(snapshot, target) {
   if (labels.length > 1) return { unknown: 'Ambiguous actor label; use an exact path.' };
   const explicitlyResolved = snapshot.scope?.targets?.includes(target);
   if (labels.length === 1) {
-    if (!snapshot.coverage.complete && !explicitlyResolved) return { unknown: 'Partial coverage cannot establish label uniqueness; use an exact path.' };
+    const narrowed = snapshot.scope?.targets?.length || Object.keys(snapshot.scope?.filter || {}).length;
+    if ((!snapshot.coverage.complete || narrowed) && !explicitlyResolved) return { unknown: 'Partial or filtered coverage cannot establish label uniqueness; use an exact path.' };
     return { actor: labels[0] };
   }
   if (snapshot.unreadable?.includes(target)) return { unknown: 'Actor was present but could not be read.' };

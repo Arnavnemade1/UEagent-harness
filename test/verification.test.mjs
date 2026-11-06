@@ -64,6 +64,10 @@ it('never turns missing, ambiguous or partial evidence into a pass', () => {
   assert.equal(verify(cameraUnknown, [criterion('in_frame')]).status, 'incomplete');
   delete cameraUnknown.actors[0].components;
   assert.equal(verify(cameraUnknown, [criterion('mesh_assigned')]).status, 'incomplete');
+  const filtered = snapshot();
+  filtered.scope.filter = { selected: true };
+  assert.equal(verify(filtered, [criterion('exists')]).status, 'incomplete');
+  assert.equal(verify(filtered, [criterion('exists', { actor: filtered.actors[0].path })]).status, 'pass');
 });
 
 it('detects sampled animation discontinuities at exact frames and handles angle wraparound', () => {

@@ -38,8 +38,8 @@ export function framing(actor, camera) {
   // AABB-plane test: conservative intersection, not a pixel visibility test.
   const planes = [([x]) => x - 0.01, ([x, y]) => x * th - y, ([x, y]) => x * th + y,
     ([x, , z]) => x * tv - z, ([x, , z]) => x * tv + z];
-  const outside = planes.some((plane) => corners.every((corner) => plane(corner) < 0));
-  const inside = planes.every((plane) => corners.every((corner) => plane(corner) >= 0));
+  const outside = planes.some((plane) => corners.every((corner) => plane(corner) < -1e-7));
+  const inside = planes.every((plane) => corners.every((corner) => plane(corner) >= -1e-7));
   return {
     state: outside ? 'outside' : inside ? 'inside' : 'intersects',
     center_uv: center[0] > 0.01 ? [0.5 + center[1] / (2 * center[0] * th), 0.5 - center[2] / (2 * center[0] * tv)] : null,
