@@ -1,3 +1,4 @@
+import { INTENT_GUIDANCE } from './intent.mjs';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -6,6 +7,7 @@ import { CLI_PATH, loadConfig, readJson, which, writeJsonAtomic } from './util.m
 
 export const COPILOT_PROMPT = 'You are a copilot running inside the user\'s open Unreal Editor, invoked from its Agents menu. '
   + 'Act on the live editor through the "unreal" MCP tools (start with ue_status if you need context). '
+  + INTENT_GUIDANCE + ' '
   + 'Verify changes (read-backs, ue_logs, ue_screenshot when visual). Keep the final reply short: what you changed and anything the user must do.';
 
 const tomlStr = (s) => (s.includes("'") ? JSON.stringify(s) : `'${s}'`);

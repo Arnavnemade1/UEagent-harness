@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { INTENT_GUIDANCE } from './intent.mjs';
 import path from 'node:path';
 import { BridgeClient, BridgeError, NOT_RUNNING_HINT } from './bridge.mjs';
 import { build, findEngine, launchEditor, lastBuild, newestSourceChange } from './build.mjs';
@@ -18,6 +19,7 @@ const rw = { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
 const destructive = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 
 export const INSTRUCTIONS = `Live bridge into the user's running Unreal Editor (shared with the user and possibly other agents).
+${INTENT_GUIDANCE}
 - Start with ue_status: level, selection, camera, unsaved work, recent errors.
 - Prefer batched structured tools (ue_edit_actors/ue_edit_assets take many ops per call). Use ue_python for anything else (full \`unreal\` API, runs on the game thread).
 - Each mutating call is ONE undo step labelled with your name (Edit > Undo History); ue_undo reverts it. Batches roll back on failure.
@@ -577,7 +579,7 @@ const HANDLERS = {
 export function listTools() { return TOOLS; }
 
 export async function callTool(session, name, args = {}, ctx = {}) {
-  const h = HANDLERS[name];
+  const h = Object.hasOwn(HANDLERS, name) ? HANDLERS[name] : null;
   if (!h) return fail(session, new BridgeError('unknown_tool', `unknown tool ${name}`));
   try {
     return await h(session, args || {}, ctx);

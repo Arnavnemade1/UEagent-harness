@@ -84,6 +84,22 @@ Door actor in C++ that swings open on overlap, build it and place one by the Pla
 - **Output Log, Python mode:** `ask_claude("make the selected light warmer")`,
   `ask_codex("...")`, `agent_continue("...")` and `agent_stop()`.
 
+## Understanding the request
+
+Editor-menu requests capture the project, level, revision, play state and selected object
+paths at the time you ask. Agents use these paths to interpret "this" or "the selected thing"
+even if you change selection while they start. Shared guidance asks Claude and Codex to inspect
+context, resolve meaningful ambiguity with one focused question, respect your constraints,
+and verify the requested outcome before reporting completion.
+
+Project discovery refuses ambiguous projects instead of choosing one silently. When several
+projects are open or present in a folder, set `UE_AGENT_PROJECT` to the desired `.uproject`,
+or pass `--project /path/to/Game.uproject` to the CLI. An invalid explicit project fails rather
+than falling back to another editor.
+
+A timed-out or disconnected edit may have completed in Unreal. The transport never replays
+it automatically; agents are instructed to inspect the result before retrying.
+
 ## How it stays in sync and verified
 
 - **One journal.** The bridge keeps a revision counter. Every agent call is journalled and
@@ -153,11 +169,12 @@ Notes from that testing:
 ## Development
 
 ```sh
-npm test   # 38 tests: real plugin code vs. a fake `unreal` module, MCP protocol, setup, hooks
+npm test   # plugin integration, transport recovery, MCP, project selection, context, setup and hooks
 python3 test/fake/fake_editor.py /tmp/FakeGame   # a fake editor you can point real agents at
 ```
 
 The test engine (`test/fake/unreal.py`) mirrors the UE 5 editor scripting API, including its
 undo buffer, dirty packages and log format. It is not Unreal itself. Real Claude Code and Codex
-sessions were run against it through this harness, but the plugin has **not yet been run inside
-a real Unreal Editor**. Run `ue-agent doctor` on first use.
+sessions were run against it through this harness. Real-editor testing is described above;
+fake-editor tests do not establish compatibility with every engine version. Run `ue-agent doctor`
+on first use.
