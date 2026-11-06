@@ -3,6 +3,8 @@ import { callTool, INSTRUCTIONS, listTools, Session } from './tools.mjs';
 import { log, VERSION } from './util.mjs';
 
 const SUPPORTED = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
+const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const isId = (value) => typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value));
 
 function normalizeClient(name) {
   if (process.env.UE_AGENT_CLIENT) return process.env.UE_AGENT_CLIENT;
@@ -28,6 +30,13 @@ export function runMcpServer({ project, input = process.stdin, output = process.
   async function handle(msg) {
     const { id, method, params = {} } = msg;
     const isRequest = id !== undefined && id !== null;
+    // Request methods without an id are notifications: never run an edit that
+    // the client cannot receive or correlate a result for.
+    if (!isRequest && !method.startsWith('notifications/')) return;
+    if (!isObject(params)) {
+      if (isRequest) error(id, -32602, 'params must be an object');
+      return;
+    }
     switch (method) {
       case 'initialize': {
         const requested = params.protocolVersion;
@@ -55,6 +64,13 @@ export function runMcpServer({ project, input = process.stdin, output = process.
       case 'prompts/list': reply(id, { prompts: [] }); return;
       case 'logging/setLevel': reply(id, {}); return;
       case 'tools/call': {
+        if (typeof params.name !== 'string' || !params.name.trim()
+          || (params.arguments !== undefined && !isObject(params.arguments))
+          || (params._meta !== undefined && !isObject(params._meta))
+          || (params._meta?.progressToken !== undefined && !isId(params._meta.progressToken))) {
+          error(id, -32602, 'tools/call requires a tool name, object arguments and a string or number progressToken when provided');
+          return;
+        }
         if (!started) { started = true; session.start(); }
         const token = params._meta?.progressToken;
         const abort = new AbortController();
@@ -86,7 +102,13 @@ export function runMcpServer({ project, input = process.stdin, output = process.
       return;
     }
     const msgs = Array.isArray(msg) ? msg : [msg];
+    if (!msgs.length) { error(null, -32600, 'invalid request'); return; }
     for (const m of msgs) {
+      if (!isObject(m) || m.jsonrpc !== '2.0' || typeof m.method !== 'string'
+        || !m.method || (m.id !== undefined && !isId(m.id))) {
+        error(isObject(m) && isId(m.id) ? m.id : null, -32600, 'invalid request');
+        continue;
+      }
       handle(m).catch((e) => {
         log('handler error:', e.stack || e.message);
         if (m.id !== undefined && m.id !== null) error(m.id, -32603, e.message);
