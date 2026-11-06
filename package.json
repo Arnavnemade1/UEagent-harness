@@ -1,0 +1,23 @@
+{
+  "name": "ue-agent-harness",
+  "version": "1.0.0",
+  "description": "Connect Claude Code and Codex to a live Unreal Editor: MCP server + pure-Python editor bridge. Zero dependencies.",
+  "type": "module",
+  "bin": {
+    "ue-agent": "bin/ue-agent.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test --test-timeout=120000 test/*.test.mjs",
+    "fake-editor": "python3 test/fake/fake_editor.py"
+  },
+  "files": [
+    "bin",
+    "src",
+    "plugin",
+    "templates"
+  ],
+  "license": "MIT"
+}
