@@ -16,11 +16,16 @@ _VIEW_MODES = {
 }
 
 
+def _norm_deg(a):
+    """The editor never wraps viewport yaw (it can read -851); report -180..180."""
+    return ((float(a) + 180.0) % 360.0) - 180.0
+
+
 def _camera_json():
     loc, rot = compat.camera()
     if loc is None:
         return None
-    return {"location": values.vec_json(loc), "rotation": values.rot_json(rot)}
+    return {"location": values.vec_json(loc), "rotation": [values.num(_norm_deg(rot.pitch)), values.num(_norm_deg(rot.yaw)), values.num(_norm_deg(rot.roll))]}
 
 
 def _forward(rot):
@@ -45,7 +50,7 @@ def focus_on(actors, pitch=None, yaw=None, distance=None):
     _, cur = compat.camera()
     rot = unreal.Rotator()
     rot.pitch = float(pitch) if pitch is not None else -25.0
-    rot.yaw = float(yaw) if yaw is not None else (cur.yaw if cur is not None else 0.0)
+    rot.yaw = _norm_deg(float(yaw) if yaw is not None else (cur.yaw if cur is not None else 0.0))
     rot.roll = 0.0
     dist = float(distance) if distance else radius * 2.6
     loc = center - _forward(rot) * dist

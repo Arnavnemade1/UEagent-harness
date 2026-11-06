@@ -144,6 +144,7 @@ describe('editor tools', () => {
     assert.equal(Buffer.from(r.images[0].data, 'base64').subarray(1, 4).toString(), 'PNG');
     assert.ok(fs.existsSync(out));
     assert.ok(r.json.camera.location);
+    assert.ok(Math.abs(r.json.camera.rotation[1]) <= 180, 'yaw normalised');
   });
 
   it('creates materials, instances and guards deletes of referenced assets', async () => {

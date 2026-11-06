@@ -328,4 +328,6 @@ def inspect(ctx, a):
         res["components"] = ops_blueprint.components(obj)
     if len(props) > limit:
         res["hint"] = "showing %d of %d properties; pass filter or a larger limit" % (limit, len(props))
+    elif not props and flt and kind == "actor":
+        res["hint"] = "no actor-level property matches '%s'; render/physics settings usually live on a component: pass component (e.g. StaticMeshComponent)" % flt
     return res

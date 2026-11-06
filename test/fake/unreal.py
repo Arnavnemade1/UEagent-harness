@@ -1333,6 +1333,7 @@ class AutomationLibrary(object):
     @staticmethod
     def take_high_res_screenshot(w, h, filename, *a, **k):
         _S["pending_files"].append((filename, _png(w, h), _S["frame"] + 3))
+        _fake_tick()  # like the real editor, this pumps a nested Slate tick synchronously
         return object()
 
     @staticmethod
@@ -1360,7 +1361,7 @@ class ScopedSlowTask(object):
         return False
 
     def make_dialog(self, can_cancel=False, allow_in_pie=False):
-        pass
+        _fake_tick()  # progress dialogs tick Slate re-entrantly in the real editor
 
     def enter_progress_frame(self, work=1.0, desc=""):
         pass

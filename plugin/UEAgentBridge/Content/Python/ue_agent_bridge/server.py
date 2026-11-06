@@ -196,6 +196,7 @@ class BridgeServer(object):
         self._next_cid = 1
         self._tick_handle = None
         self._last_err_log = 0.0
+        self._pumping = False
         self.paths = compat.project_paths()
         self.bridge_dir = os.path.join(self.paths.get("saved_dir") or HOME_DIR, "UEAgentBridge")
         self._discovery_files = []
@@ -353,8 +354,19 @@ class BridgeServer(object):
                 unreal.log_error("[UEAgentBridge] tick error: %s" % traceback.format_exc(limit=4))
 
     def pump(self):
-        if self.lsock is None:
+        # Some engine calls (screenshots, progress dialogs, asset imports) tick Slate
+        # synchronously, which re-enters this callback mid-operation. Never dispatch
+        # re-entrantly: it would resume a running generator or run another request
+        # in the middle of an open transaction.
+        if self.lsock is None or self._pumping:
             return
+        self._pumping = True
+        try:
+            self._pump()
+        finally:
+            self._pumping = False
+
+    def _pump(self):
         t0 = _now()
         self._poll_io()
         if self.tasks:
