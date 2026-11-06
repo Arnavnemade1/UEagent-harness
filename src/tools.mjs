@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { INTENT_GUIDANCE } from './intent.mjs';
+import { ObservationStore } from './scene-intelligence.mjs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -68,6 +69,21 @@ const TOOLS = [
         limit: num('Max actors returned (default 50).'), detail: bool('Include components/materials/bounds.'),
       },
     },
+    annotations: ro,
+  },
+  {
+    name: 'ue_observe',
+    title: 'Observe scene evidence',
+    description: 'Read a bounded scene snapshot: exact actor identities, transforms, world bounds, attachments, optional meshes/materials/lights/requested bone poses, camera framing and current Sequencer playhead. No asset loads, rendering or timeline edits. Returns a session snapshot id for ue_verify. Frustum inclusion does not establish occlusion or visual quality. Default viewport FOV is unknown; choose a camera actor or supply calibrated viewport projection. At most 64 actors, 12 components per actor, 16 requested bones; partial coverage is explicit. Cache retains up to 32 snapshots within 1 MiB.',
+    inputSchema: { type: 'object', properties: {
+      targets: { type: 'array', maxItems: 64, items: str('Exact actor path or unique label. No wildcards.') },
+      filter: obj('Alternative to targets: class, name, tag, folder, selected filters.'),
+      limit: { type: 'integer', minimum: 1, maximum: 64, default: 32 },
+      components: bool('Include up to 12 component summaries per actor (default false).'),
+      bones: { type: 'array', maxItems: 16, items: str('Specific bone name; world-space evaluated pose, not reference pose.') },
+      camera: str('Camera actor path/label, or @viewport (default). Does not move the viewport.'),
+      projection: obj('For @viewport only: {hfov: horizontal degrees, aspect: width/height}. Caller-calibrated; no assumed lens.'),
+    } },
     annotations: ro,
   },
   {
@@ -355,6 +371,7 @@ export class Session {
     this.clientName = clientName;
     this.bridge = new BridgeClient({ project: this.project, clientName, subscribe: true });
     this.journal = new Journal();
+    this.observations = new ObservationStore();
     this.disk = new DiskWatcher(this.journal);
     this.cursorRev = 0;
     this.cursorT = Date.now();
@@ -362,7 +379,7 @@ export class Session {
     this.logCursor = null;
     this.statusLogCursor = null;
     this.bridge.on('change', (ev) => this.journal.add(ev));
-    this.bridge.on('restart', () => { this.journal.reset(); this.cursorRev = 0; this.syncRev = 0; });
+    this.bridge.on('restart', () => { this.journal.reset(); this.observations.clear(); this.cursorRev = 0; this.syncRev = 0; });
     this.bridge.on('connect', (info) => {
       if (!this.project && info.project) this.project = info.project;
       if (this.cursorRev > (info.rev || 0)) this.cursorRev = 0;
@@ -379,7 +396,7 @@ export class Session {
     if (this.project && !this.disk.watchers.length) this.disk.start(path.dirname(this.project));
   }
 
-  close() { this.disk.stop(); this.bridge.close(); }
+  close() { this.disk.stop(); this.observations.clear(); this.bridge.close(); }
 
   digest() {
     const d = this.journal.digest({ sinceRev: this.cursorRev, sinceT: this.cursorT, selfCid: this.bridge.info?.client_id, rev: this.bridge.rev });
@@ -491,6 +508,10 @@ const HANDLERS = {
   },
 
   ue_edit_actors: (s, a) => bridgeTool(s, 'edit_actors', a, 120000),
+  async ue_observe(s, a) {
+    const r = await s.call('observe', a, 30000);
+    return ok(s, s.observations.add(r.result), { warnings: r.warnings });
+  },
   ue_inspect: (s, a) => bridgeTool(s, 'inspect', a),
   ue_find_assets: (s, a) => bridgeTool(s, 'find_assets', a),
   ue_edit_assets(s, a) {

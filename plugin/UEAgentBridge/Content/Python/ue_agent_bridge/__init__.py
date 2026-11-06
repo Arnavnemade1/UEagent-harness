@@ -42,7 +42,7 @@ def start(port=None, token=None):
         except Exception:
             pass
     from . import server as _server
-    from . import ops_core, ops_actors, ops_assets, ops_editor, ops_blueprint, ops_transfer  # noqa: F401 (register ops)
+    from . import ops_core, ops_actors, ops_assets, ops_editor, ops_blueprint, ops_transfer, ops_observe  # noqa: F401 (register ops)
 
     if port is None:
         env_port = os.environ.get("UE_AGENT_BRIDGE_PORT")
@@ -60,7 +60,7 @@ def start(port=None, token=None):
 
 
 _MODULE_ORDER = ("registry", "compat", "values", "scene", "watch", "server", "ops_core", "ops_actors",
-                 "ops_assets", "ops_editor", "ops_blueprint", "ops_transfer", "menu")
+                 "ops_assets", "ops_editor", "ops_blueprint", "ops_transfer", "ops_observe", "menu")
 
 
 def _reload_modules():
