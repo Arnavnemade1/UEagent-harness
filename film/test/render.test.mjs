@@ -18,8 +18,9 @@ function png(w, h, rgb) {  // minimal solid-colour PNG encoder
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 
-test('plate compositing: holdouts reveal the plate, actors draw on top, only new shadows darken', { skip: !findChrome() && 'Chrome not installed', timeout: 120000 }, async () => {
+test('plate compositing: holdouts reveal the plate, actors draw on top, only new shadows darken', { skip: !findChrome() && 'Chrome not installed', timeout: 120000 }, async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hfilm-render-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   for (let f = 0; f < 3; f++) fs.writeFileSync(path.join(dir, `plate.${f}.png`), png(32, 18, [120, 160, 90]));
   // camera looks straight down (screen right = +X, ~15.6 px per metre at the ground); a red 2 m box at x=-3,
   // a holdout over x=3.5..6.5, sun from +X so the box's shadow falls on x=-5.2..-4
@@ -34,11 +35,28 @@ test('plate compositing: holdouts reveal the plate, actors draw on top, only new
     actors: [{ id: 'box', model: { primitive: 'box', size: [2, 2, 2], material: { color: '#ff0000', roughness: 1 } }, transform: { position: [-3, 1, 0] } }],
   };`);
   const probe = { frames: [1], points: [[113, 90], [238, 90], [160, 165], [86, 90]], results: {} };
-  const res = await render(path.join(dir, 'film.mjs'), { out: path.join(dir, 'out.mp4'), probe });
+  const res = await render(path.join(dir, 'film.mjs'), { out: path.join(dir, 'out.mp4'), probe, memoryGB: 2, timeoutMin: 1 });
   assert.ok(res.ok && fs.statSync(path.join(dir, 'out.mp4')).size > 1000, 'mp4 written');
   const [box, holdout, plain, shadow] = probe.results[1];
   assert.ok(box[0] > 120 && box[1] < 80, `box should be red, got ${box}`);
   assert.ok(Math.abs(holdout[0] - 120) < 12 && Math.abs(holdout[1] - 160) < 12, `holdout area shows the plate, got ${holdout}`);
   assert.ok(Math.abs(plain[1] - 160) < 12, `untouched plate stays the same, got ${plain}`);
   assert.ok(shadow[1] < plain[1] - 30, `box casts a shadow onto the plate (shadow ${shadow} vs plate ${plain})`);
+});
+
+test('external PBR color maps keep sRGB appearance while material data maps load linearly', { skip: !findChrome() && 'Chrome not installed', timeout: 120000 }, async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hfilm-pbr-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'emissive.png'), png(4, 4, [128, 32, 16]));
+  fs.writeFileSync(path.join(dir, 'normal.png'), png(4, 4, [128, 128, 255]));
+  fs.writeFileSync(path.join(dir, 'data.png'), png(4, 4, [255, 255, 255]));
+  fs.writeFileSync(path.join(dir, 'film.json'), JSON.stringify({
+    size: [64, 64], frames: [0, 1], sun: false, ambient: { intensity: 0 }, render: { samples: 1, toneMapping: 'none', dither: 0 },
+    camera: { position: [0, 0, 5], target: [0, 0, 0], fov: 40 },
+    actors: [{ model: { primitive: 'box', size: [2, 2, 2], material: { color: '#000000', emissive: '#ffffff', emissiveMap: 'emissive.png', normalMap: 'normal.png', roughnessMap: 'data.png', metalnessMap: 'data.png', aoMap: 'data.png' } } }],
+  }));
+  const probe = { frames: [0], points: [[32, 32]], results: {} };
+  await render(path.join(dir, 'film.json'), { out: false, probe, memoryGB: 2, timeoutMin: 1 });
+  const pixel = probe.results[0][0];
+  for (const [i, value] of [128, 32, 16].entries()) assert.ok(Math.abs(pixel[i] - value) <= 3, `color space changed emissive appearance: ${pixel}`);
 });

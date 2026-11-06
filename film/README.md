@@ -37,6 +37,13 @@ encoding, and is composited:
   already has in shadow.
 - **Plate geometry shadows the actors.** A player who runs into a stand's shadow darkens.
 
+## External assets and bounded rendering
+
+Use `hfilm ingest` to stage external media with checksums and provenance, then `hfilm preflight`
+to validate inputs and estimate memory before launching a renderer. Explicit preview/balanced/final
+profiles, PBR texture channels, HDR/EXR lighting, guarded workers and atomic video output are
+described in [the reliability guide](RELIABILITY.md).
+
 ## Install
 
 ```bash
@@ -134,7 +141,7 @@ hfilm ue plates film.mjs --project MyGame.uproject --map /Game/Maps/Stadium \
   --hide "Players,Ball"                 # outliner folders, actor labels or tag:Name: the film re-creates these
   --holdouts "Goals,Boards,Roof"        # what actors can pass behind, which also shadows them
   --grid M_Net --ground Pitch           # see-through net material; ground actor for the shadow catcher
-  [--preset /Game/Cinematics/MRQ_Final] [--memory 9] [--name shot] [--skip-render] [--resume] [--timeout 120]
+  [--preset /Game/Cinematics/MRQ_Final] [--memory 7] [--name shot] [--skip-render] [--resume] [--timeout 120]
 ```
 
 Two headless Unreal runs, and your map is never modified:

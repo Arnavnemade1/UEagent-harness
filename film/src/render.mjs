@@ -38,7 +38,7 @@ export async function render(file, { out, frames, samples, quality, memoryGB, ti
       samples: baked.render.samples, gpu: info.gpu, actors: info.actors, holdouts: info.holdouts, plate: info.plate,
       avgFrameMs: Math.round(total / count), seconds: Math.round((Date.now() - t0) / 100) / 10,
       quality: plan, inputs: report.inputs, input_count: report.input_count, inputs_truncated: report.inputs_truncated, warnings: report.warnings,
-      resource: { peakProcessTreeBytes: browser.guard.peakBytes, memoryGB: plan.memoryGB, sampleIntervalMs: 3000 },
+      resource: { peakProcessTreeBytes: browser.guard.peakBytes || null, memoryGB: plan.memoryGB, sampleIntervalMs: 3000 },
       validation: outFile ? 'MP4 structure and encoded frame count validated before atomic publication' : 'rendered frames; no video requested',
     };
   } finally {

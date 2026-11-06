@@ -17,7 +17,17 @@
     "bin",
     "src",
     "plugin",
-    "templates"
+    "templates",
+    "docs",
+    "film/bin",
+    "film/src",
+    "film/web",
+    "film/ue",
+    "film/examples",
+    "film/README.md",
+    "film/package.json",
+    "film/package-lock.json",
+    "film/RELIABILITY.md"
   ],
   "license": "MIT"
 }
