@@ -58,6 +58,28 @@ describe('log parsing', () => {
   });
 });
 
+describe('log location', () => {
+  it('finds the macOS editor log and prefers the folder the bridge reports', () => {
+    const proj = makeProject('MacLogs');
+    const code = `import { logFile } from ${JSON.stringify(path.resolve('src/logs.mjs'))}; console.log(logFile(process.argv[1]));`;
+    const where = () => spawnSync(process.execPath, ['--input-type=module', '-e', code, proj.project], { env: { ...process.env, HOME: proj.home }, encoding: 'utf8' }).stdout.trim();
+    if (process.platform === 'darwin') {
+      const macDir = path.join(proj.home, 'Library', 'Logs', 'Unreal Engine', 'MacLogsEditor');
+      fs.mkdirSync(macDir, { recursive: true });
+      fs.writeFileSync(path.join(macDir, 'MacLogs.log'), '');
+      assert.equal(fs.realpathSync(where()), fs.realpathSync(path.join(macDir, 'MacLogs.log')));
+    }
+    const reported = path.join(proj.root, 'custom-logs');
+    fs.mkdirSync(reported, { recursive: true });
+    fs.writeFileSync(path.join(reported, 'MacLogs.log'), '');
+    const bj = path.join(proj.dir, 'Saved', 'UEAgentBridge');
+    fs.mkdirSync(bj, { recursive: true });
+    fs.writeFileSync(path.join(bj, 'bridge.json'), JSON.stringify({ log_dir: reported }));
+    assert.equal(where(), path.join(reported, 'MacLogs.log'));
+    fs.rmSync(proj.root, { recursive: true, force: true });
+  });
+});
+
 describe('journal digest', () => {
   it('summarises other parties\' changes and skips the caller\'s own', () => {
     const j = new Journal();

@@ -252,6 +252,7 @@ class BridgeServer(object):
             "project": self.paths.get("project_file"),
             "project_dir": self.paths.get("project_dir"),
             "engine_dir": self.paths.get("engine_dir"),
+            "log_dir": self.paths.get("log_dir"),
             "engine_version": compat.engine_version(),
             "python": sys.version.split()[0],
             "started": int(self.started_at),

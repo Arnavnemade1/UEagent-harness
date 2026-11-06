@@ -1,14 +1,26 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { bridgeFile } from './discovery.mjs';
+import { readJson } from './util.mjs';
 
 // [2026.11.05-17.22.33:123][ 45]LogBlueprint: Error: message
 const LINE = /^\[(\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}:\d{3})\]\[\s*(\d+)\](\w+):\s(?:(Fatal|Error|Warning|Display|Log|Verbose|VeryVerbose):\s)?(.*)$/;
 const BARE = /^(Log\w+|\w+):\s(?:(Fatal|Error|Warning|Display|Verbose):\s)?(.*)$/;
 const SEV_RANK = { fatal: 0, error: 1, warning: 2, display: 3, log: 4, verbose: 5, veryverbose: 6 };
 
+/**
+ * The editor's log file. The bridge reports its real log folder; otherwise try
+ * <Project>/Saved/Logs (Windows/Linux) and ~/Library/Logs/Unreal Engine/<Name>Editor (macOS).
+ */
 export function logFile(projectFile) {
-  const dir = path.join(path.dirname(projectFile), 'Saved', 'Logs');
-  return path.join(dir, `${path.basename(projectFile, path.extname(projectFile))}.log`);
+  const name = path.basename(projectFile, path.extname(projectFile));
+  const cands = [];
+  const reported = readJson(bridgeFile(projectFile))?.log_dir;
+  if (reported) cands.push(path.join(reported, `${name}.log`));
+  cands.push(path.join(path.dirname(projectFile), 'Saved', 'Logs', `${name}.log`));
+  if (process.platform === 'darwin') cands.push(path.join(os.homedir(), 'Library', 'Logs', 'Unreal Engine', `${name}Editor`, `${name}.log`));
+  return cands.find((f) => fs.existsSync(f)) || cands[0];
 }
 
 export function parseLine(line) {
